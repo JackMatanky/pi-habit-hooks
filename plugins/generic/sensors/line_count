@@ -22,7 +22,7 @@ if (files.length > 0) {
     });
   } catch (error) {
     // a non-zero exit is an incomplete run, not a clean one
-    console.error(`line_count_sensor: tokei failed: ${error.message}`);
+    console.error(`line_count: tokei failed: ${error.message}`);
     process.exit(1);
   }
 
