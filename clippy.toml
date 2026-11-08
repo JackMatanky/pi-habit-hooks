@@ -1,0 +1,106 @@
+# -----------------------------------------------------------------------------
+# Filename:    pi-habit-hooks/clippy.toml
+# Docs:        https://doc.rust-lang.org/clippy/configuration.html
+# Description: Configuration for clippy lints, including complexity thresholds
+#              and project-specific valid identifiers.
+#
+# AI Safeguards:
+# - Cognitive complexity <= 25 keeps AI-generated functions manageable.
+# - Disallowed methods prevent AI from taking shortcuts.
+#
+# Note: Cargo applies the nearest clippy.toml, so do not add one in a
+# subdirectory. Plugin sample thresholds belong in plugins/<lang>/config.toml.
+# -----------------------------------------------------------------------------
+
+# Complexity Thresholds
+cognitive-complexity-threshold = 25
+too-many-lines-threshold = 100
+too-many-arguments-threshold = 5
+type-complexity-threshold = 160
+excessive-nesting-threshold = 5
+
+# Memory & Performance Thresholds
+# Limit large types on stack to encourage boxing or reference passing.
+too-large-for-stack = 128
+# Flags large arrays on stack (>= 1KB).
+array-size-threshold = 1024
+# Limits stack frame size to prevent overflows.
+stack-size-threshold = 4096
+# Prevents boxing large vectors unless capacity planning is deliberate.
+vec-box-size-threshold = 4096
+
+# Structural Restrictions
+max-fn-params-bools = 2
+max-struct-bools = 2
+max-trait-bounds = 3
+enum-variant-size-threshold = 128
+large-error-threshold = 128
+check-inconsistent-struct-field-initializers = true
+
+# Project Metadata
+msrv = "1.96"
+doc-valid-idents = [
+  "Habit",
+  "Hooks",
+  "OMP",
+  "Pi",
+  "Clippy",
+  "CLI",
+  "JSON",
+  "TOML",
+  "YAML",
+  "TypeScript",
+  "JavaScript",
+]
+disallowed-names = ["foo", "bar", "baz", "quux", "tmp"]
+
+# Source Ordering
+# Reference-only unless `clippy::arbitrary_source_item_ordering` is enabled.
+# The lint stays disabled because this project prefers reader-first ordering;
+# these settings document the closest mechanical approximation Clippy offers.
+source-item-ordering = ["module", "trait"]
+
+module-item-order-groupings = [
+  ["modules", ["extern_crate", "mod", "foreign_mod"]],
+  ["use", ["use"]],
+  [
+    "items",
+    [
+      "macro",
+      "global_asm",
+      "static",
+      "const",
+      "ty_alias",
+      "enum",
+      "struct",
+      "union",
+      "trait",
+      "trait_alias",
+      "impl",
+      "fn",
+      "test_binder_constraints",
+    ],
+  ],
+]
+
+# Enforce grouping order only (keeps reader-first ordering within each group).
+module-items-ordered-within-groupings = "none"
+
+# Make trait contents predictable and easy to scan.
+trait-assoc-item-kinds-order = ["const", "type", "fn"]
+
+# Test Restrictions (unwrap/expect allowed in tests for simplicity)
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# Disallowed Methods (Prevent common anti-patterns and unsafe shortcuts)
+# `std::process::exit` and `std::env::current_dir` are allowed on purpose: the
+# CLI binaries and sensors are process entry points that own the exit code and
+# resolve the project directory from the working directory.
+disallowed-methods = [
+  { path = "std::mem::forget", reason = "Potential memory leak. Use ManuallyDrop or ensure correct RAII management." },
+  { path = "std::env::set_current_dir", reason = "Process-global cwd mutation causes concurrency races; spawn processes with .current_dir() instead." },
+  { path = "std::fs::canonicalize", reason = "Expensive I/O operation. Use only when strictly necessary for path resolution." },
+  { path = "std::thread::sleep", reason = "Blocks the current thread. In async code, use tokio::time::sleep." },
+  { path = "std::panic::catch_unwind", reason = "Prefer Result-based error handling. Catching panics is non-idiomatic for control flow." },
+]

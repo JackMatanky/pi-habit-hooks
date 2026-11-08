@@ -7,4 +7,5 @@ node_modules/
 .habit-hooks/agents/
 **/.habit-hooks/agents/
 .pi/
+.mise/
 .DS_Store

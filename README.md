@@ -21,13 +21,27 @@ vocabulary routed to outcome-oriented AI coaching prompts.
 
 ## Installation & Build
 
-```bash
-# Build native binaries and TypeScript extension
-npm run build
+Development tools are pinned in `mise.toml` (Rust nightly, Node, hk, Vite+,
+taplo, tombi, gitleaks, cargo-audit) and installed with
+[mise](https://mise.jdx.dev/); git hooks run through
+[hk](https://hk.jdx.dev/) (`hk.pkl`).
 
-# Run all test suites (Rust tests, drift gate, and Node extension tests)
-npm test
+```bash
+mise install        # all tools, versions locked in mise.lock
+mise run setup      # npm dependencies + git hooks
+
+mise run build      # release binaries, then the TypeScript extension
+mise run test       # Rust tests, then the extension tests (Vite+ / Vitest)
+mise run lint       # clippy (-D warnings) and Vite+ lint
+mise run fmt        # rustfmt (nightly) and Vite+ formatter
+mise run ci         # format check, lint, type check, tests
 ```
+
+Rust style lives in `clippy.toml` and `rustfmt.toml`; TypeScript formatting,
+linting and tests are configured in `vite.config.ts`. Hooks: `pre-commit`
+formats and validates, `pre-push` runs security and quality gates, `commit-msg`
+enforces Conventional Commits.
+
 
 ## CLI Usage
 

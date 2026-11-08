@@ -111,14 +111,7 @@ export function fingerprintFiles(root, files) {
  */
 export async function changedRust(cwd, signal) {
     const [status, top] = await Promise.all([
-        runProcess("git", [
-            "status",
-            "--porcelain",
-            "-z",
-            "--untracked-files=all",
-            "--",
-            "*.rs",
-        ], {
+        runProcess("git", ["status", "--porcelain", "-z", "--untracked-files=all", "--", "*.rs"], {
             cwd,
             timeoutMs: GIT_TIMEOUT_MS,
             signal,
@@ -213,9 +206,7 @@ export class FirePolicy {
             : scope.changed;
         const repoRoot = getRepoRoot(cwd);
         return this.exclusive(cwd, async () => {
-            const key = changed
-                ? `${repoRoot}\0${changed.fingerprint}`
-                : undefined;
+            const key = changed ? `${repoRoot}\0${changed.fingerprint}` : undefined;
             const hit = key ? this.cache.get(key) : undefined;
             if (hit && Date.now() - hit.at < CACHE_TTL_MS)
                 return hit.result;
@@ -233,7 +224,8 @@ export class FirePolicy {
                 }
             }
             if (kind === "timeout")
-                getOwnership(resolveRoot(scope.agentId), repoRoot).suspendedUntil = Date.now() + SUSPEND_MS;
+                getOwnership(resolveRoot(scope.agentId), repoRoot).suspendedUntil =
+                    Date.now() + SUSPEND_MS;
             return result;
         });
     }
@@ -338,8 +330,7 @@ export class FirePolicy {
         // rendered text.
         const report = result.report;
         const ownFault = report !== undefined &&
-            report.enforcedFiles.some((reported) => scope.files.some((f) => own.hard.has(f) &&
-                samePath(reported, fromCwd(cwd, scope.root, f))));
+            report.enforcedFiles.some((reported) => scope.files.some((f) => own.hard.has(f) && samePath(reported, fromCwd(cwd, scope.root, f))));
         if (!ownFault) {
             const advisory = report?.incompleteRun
                 ? "⚠️ incomplete run (build broken outside your files)"
@@ -367,8 +358,7 @@ export class FirePolicy {
         const repoPath = toRepoPath(cwd, repoRoot, file);
         if (!repoPath || !own.hard.has(repoPath))
             return {};
-        if (!existsSync(join(cwd, "Cargo.toml")) ||
-            Date.now() < own.suspendedUntil)
+        if (!existsSync(join(cwd, "Cargo.toml")) || Date.now() < own.suspendedUntil)
             return {};
         const result = await this.exclusive(cwd, () => this.run({
             scope: "working",

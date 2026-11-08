@@ -3,21 +3,14 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": [
-      "ES2024"
-    ],
-    "types": [
-      "node"
-    ],
+    "lib": ["ES2024"],
+    "types": ["node"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
-    "outDir": "./dist"
+    "noEmit": true
   },
-  "include": [
-    "extensions/**/*",
-    "tests/**/*"
-  ]
+  "include": ["extensions/**/*", "tests/**/*", "vite.config.ts"]
 }

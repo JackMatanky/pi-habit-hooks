@@ -1,16 +1,5 @@
-files = [
-  "**/*",
-  "!**/.git/**",
-  "!**/target/**",
-  "!**/node_modules/**",
-  "!**/.habit-hooks/**"
-]
+files = ["**/*", "!**/.git/**", "!**/target/**", "!**/node_modules/**", "!**/.habit-hooks/**"]
 
-sensors = [
-  { name = "line-count", tool = "${dir}/sensors/line_count_sensor", args = ["${files}"], success_exit_codes = [0], transform = "line-count.jq" },
-  { name = "jscpd", tool = "jscpd", args = ["--config", "${dir}/.jscpd.json", "-a", "--reporters", "json", "--output", "${report}", "${files}"], success_exit_codes = [0, 1], transform = "jscpd.jq" }
-]
+sensors = [{ name = "line-count", tool = "${dir}/sensors/line_count_sensor", args = ["${files}"], success_exit_codes = [0], transform = "line-count.jq" }, { name = "jscpd", tool = "jscpd", args = ["--config", "${dir}/.jscpd.json", "-a", "--reporters", "json", "--output", "${report}", "${files}"], success_exit_codes = [0, 1], transform = "jscpd.jq" }]
 
-detectors = [
-  { name = "jscpd", kind = "command", install = "npm install jscpd", search_paths = ["node_modules/.bin", "${package_root}/node_modules/.bin"] }
-]
+detectors = [{ name = "jscpd", kind = "command", install = "npm install jscpd", search_paths = ["node_modules/.bin", "${package_root}/node_modules/.bin"] }]

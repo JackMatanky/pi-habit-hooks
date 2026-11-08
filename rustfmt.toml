@@ -1,0 +1,47 @@
+# -----------------------------------------------------------------------------
+# Filename:    pi-habit-hooks/rustfmt.toml
+# Docs:        https://rust-lang.github.io/rustfmt/
+# Description: Configuration for rustfmt, defining code style standards such
+#              as edition, line endings, and import grouping. Needs nightly
+#              (pinned in mise.toml) for the unstable options below.
+# -----------------------------------------------------------------------------
+
+# Must match `edition` in Cargo.toml [workspace.package].
+edition = "2021"
+style_edition = "2021"
+newline_style = "Unix"
+unstable_features = true
+
+# Import Sorting
+# Combine imports from the same crate into a single 'use' statement
+imports_granularity = "Crate"
+# Group imports as: std, external, internal
+group_imports = "StdExternalCrate"
+
+# Readability & Maintainability
+# Limit line length to 80 chars for optimal readability
+max_width = 80
+# Consistent 4-space indentation
+tab_spaces = 4
+# Place braces on the same line as 'where' clauses
+brace_style = "SameLineWhere"
+# Limit comment length to 80 chars
+comment_width = 80
+wrap_comments = true
+
+# Formatting within comments. `format_strings` stays off: it splits string
+# literals at escape sequences and can emit code that does not compile.
+format_code_in_doc_comments = true
+
+# Force multi-line for functions, struct literals, and small heuristics
+fn_single_line = false
+struct_lit_single_line = false
+use_small_heuristics = "Off"
+
+# Multi-line consistency and readability
+binop_separator = "Front"
+overflow_delimited_expr = true
+
+# Cleanup and standardization
+normalize_doc_attributes = true
+reorder_impl_items = true

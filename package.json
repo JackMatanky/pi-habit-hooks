@@ -1,19 +1,16 @@
 {
   "name": "pi-habit-hooks",
   "version": "1.5.0",
-  "type": "module",
   "description": "Code-quality coaching engine translating lint violations into canonical smell vocabulary with AI coaching prompts — works with pi and oh-my-pi",
   "keywords": [
-    "pi-package",
-    "pi",
-    "omp",
-    "pi-extension",
-    "rust",
     "code-quality",
-    "habit-hooks"
+    "habit-hooks",
+    "omp",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "rust"
   ],
-  "main": "./dist/extensions/index.js",
-  "types": "./dist/extensions/index.d.ts",
   "files": [
     "dist",
     "extensions",
@@ -22,25 +19,26 @@
     "README.md",
     "LICENSE"
   ],
-  "pi": {
-    "extensions": [
-      "./dist/extensions/index.js"
-    ],
-    "skills": [
-      "./skills"
-    ]
+  "type": "module",
+  "main": "./dist/extensions/index.js",
+  "types": "./dist/extensions/index.d.ts",
+  "scripts": {
+    "build": "cargo build --release && tsc -p tsconfig.build.json",
+    "test": "cargo test --workspace && vp test run",
+    "typecheck": "tsc --noEmit"
   },
-  "omp": {
-    "extensions": [
-      "./dist/extensions/index.js"
-    ],
-    "skills": [
-      "./skills"
-    ]
+  "dependencies": {
+    "jscpd": "^5.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vite-plus": "^1.1.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
   "peerDependenciesMeta": {
@@ -54,16 +52,23 @@
       "optional": true
     }
   },
-  "dependencies": {
-    "jscpd": "^5.4.2"
+  "engines": {
+    "node": ">=22.19.0"
   },
-  "devDependencies": {
-    "@types/node": "^26.6.5",
-    "typescript": "^7.0.2"
+  "omp": {
+    "extensions": [
+      "./dist/extensions/index.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
-  "scripts": {
-    "build": "cargo build --release && tsc",
-    "test": "cargo test && tsc && node --test dist/tests/*.test.js",
-    "typecheck": "tsc --noEmit"
+  "pi": {
+    "extensions": [
+      "./dist/extensions/index.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
   }
 }

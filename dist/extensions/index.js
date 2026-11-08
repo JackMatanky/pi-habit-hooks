@@ -1,7 +1,7 @@
-import { callKey, classifyCall, modeFor, runWorkingFor, SYSTEM_GUIDELINES, tracking, } from "./tracking.js";
 import { closeWindow, getOwnership, getRepoRoot, openWindow, rebuildFromBranch, registerAgent, resolveRoot, toRepoPath, unregisterAgent, } from "./ownership.js";
 import { getMode, isRustProject, modeFile, parseMode, persistMode, policy, statusText, classify, } from "./policy.js";
 import { defaultTimeoutMs, runHabitHooks, runHabitSnooze } from "./runner.js";
+import { callKey, classifyCall, modeFor, runWorkingFor, SYSTEM_GUIDELINES, tracking, } from "./tracking.js";
 const MODE_DESCRIPTIONS = {
     off: "never automatically (the tools and /habit-hooks still work when invoked)",
     turn: "once when the session tries to stop, only if Rust files changed",
@@ -93,9 +93,7 @@ export default function (pi) {
             content: [
                 {
                     type: "text",
-                    text: advice
-                        ? `${result.output}\n${advice}`
-                        : result.output,
+                    text: advice ? `${result.output}\n${advice}` : result.output,
                 },
             ],
             details: {
@@ -178,9 +176,7 @@ export default function (pi) {
                 ? params.action
                 : "list";
             const reason = typeof params.reason === "string" ? params.reason : undefined;
-            const inputJson = typeof params.inputJson === "string"
-                ? params.inputJson
-                : undefined;
+            const inputJson = typeof params.inputJson === "string" ? params.inputJson : undefined;
             const result = runHabitSnooze({
                 action,
                 reason,
@@ -247,14 +243,16 @@ export default function (pi) {
             if (mode && words.includes("--agent")) {
                 // this agent in this repo only, in memory; the global mode and other agents are untouched
                 const cwd = context?.cwd ?? process.cwd();
-                getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd)).mode = mode;
+                getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd)).mode =
+                    mode;
                 renderBadge(context);
                 context?.ui?.log?.(`Habit Hooks now fires ${MODE_DESCRIPTIONS[mode]} for this agent only. Not saved; /habit-hooks default --agent restores the global mode.`);
                 return;
             }
             if (word === "default" && words.includes("--agent")) {
                 const cwd = context?.cwd ?? process.cwd();
-                getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd)).mode = undefined;
+                getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd)).mode =
+                    undefined;
                 renderBadge(context);
                 context?.ui?.log?.(`This agent follows the global mode again (${getMode()}).`);
                 return;

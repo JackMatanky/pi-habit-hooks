@@ -37,7 +37,8 @@ export function registerAgent(agentId, parentId) {
 export function unregisterAgent(agentId) {
     if (parentMap.delete(agentId))
         return;
-    for (const key of [...ownershipMap.keys()])
+    // deleting the current entry while iterating a Map is well defined
+    for (const key of ownershipMap.keys())
         if (key.startsWith(`${agentId}\0`))
             ownershipMap.delete(key);
 }
@@ -213,8 +214,7 @@ function foreignOverlap(repoRoot, start, end) {
             const record = JSON.parse(readFileSync(path, "utf8"));
             if (!alive(record.pid))
                 continue;
-            if (record.windows.some((w) => w.start <= end &&
-                (w.end === undefined || w.end > start)))
+            if (record.windows.some((w) => w.start <= end && (w.end === undefined || w.end > start)))
                 return true;
         }
         catch {
@@ -313,9 +313,7 @@ function stampOf(entry) {
     const stamp = (e?.message?.details ?? e?.details)?.habitHooks;
     if (!stamp)
         return undefined;
-    const strings = (v) => Array.isArray(v)
-        ? v.filter((x) => typeof x === "string")
-        : [];
+    const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
     return { hard: strings(stamp.hard), soft: strings(stamp.soft) };
 }
 /** Replays the `details.habitHooks` stamps of a session branch, so ownership survives resume and rewind. */

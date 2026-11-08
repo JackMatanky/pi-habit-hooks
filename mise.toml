@@ -1,0 +1,146 @@
+# -----------------------------------------------------------------------------
+# Filename:    pi-habit-hooks/mise.toml
+# Docs:        https://mise.jdx.dev/
+# Description: Project-wide tool versioning and task orchestration. Every tool
+#              the repo needs is installed here; git hooks run through hk
+#              (hk.pkl), which calls back into these tasks.
+# -----------------------------------------------------------------------------
+
+[tools]
+# -- Toolchains --
+node = "26"
+rust = { version = "nightly-2026-10-01", profile = "minimal", components = [
+  "clippy",
+  "rustfmt",
+] }
+# Keep every `install_env.RUSTUP_TOOLCHAIN` below in sync with this version.
+# rustfmt.toml needs nightly for its unstable options.
+
+# -- Git hooks --
+hk = "2.0.0"
+jq = "latest"
+
+# -- TypeScript / JavaScript (Vite+: vp fmt, vp lint, vp test) --
+# `vite.config.ts` imports the `vite-plus` package, which package.json pins.
+"npm:vite-plus" = "1.1.0"
+
+# -- Data formats --
+taplo = "latest"
+tombi = "latest"
+
+# -- Security --
+gitleaks = "latest"
+"cargo:cargo-audit" = "latest"
+
+[settings]
+# `lockfile` pins resolved tool versions into `mise.lock` so installs are
+# reproducible across machines and CI.
+lockfile = true
+task.disable_spec_from_run_scripts = true
+experimental = true
+
+[env]
+HK_MISE = "1"
+RUST_BACKTRACE = "1"
+# project-local binaries from package.json (tsc)
+_.path = ["{{config_root}}/node_modules/.bin"]
+
+# ------------------------------------------------------------- #
+#                      Setup & Maintenance                      #
+# ------------------------------------------------------------- #
+
+[tasks.setup]
+description = "Install npm dependencies and git hooks via `hk`"
+outputs = []
+run = ["npm ci", "hk install --mise --quiet"]
+
+[tasks.clean]
+description = "Remove Cargo and TypeScript build output"
+confirm = "Remove target/ and dist/?"
+outputs = []
+run = ["cargo clean", "rm -rf dist"]
+
+# ------------------------------------------------------------- #
+#                   Development & Compilation                   #
+# ------------------------------------------------------------- #
+
+[tasks.build]
+description = "Release build of the Rust binaries, then the TypeScript extension"
+alias = "b"
+outputs = []
+run = ["cargo build --release", "tsc -p tsconfig.build.json"]
+
+[tasks.check]
+description = "Fast compile and type check, then `hk` project checks"
+alias = "c"
+outputs = []
+run = ["cargo check --workspace --all-targets", "tsc --noEmit", "hk check"]
+
+[tasks.typecheck]
+description = "Strict TypeScript check of the extension and its tests"
+outputs = []
+run = "tsc --noEmit"
+
+# ------------------------------------------------------------- #
+#                     Formatting & Linting                      #
+# ------------------------------------------------------------- #
+
+[tasks.fmt]
+description = "Format Rust (nightly rustfmt) and TypeScript/JSON (Vite+)"
+alias = "f"
+outputs = []
+run = ["cargo fmt --all", "vp fmt --write"]
+
+[tasks."fmt:check"]
+description = "Check formatting without modifying files"
+outputs = []
+run = ["cargo fmt --all --check", "vp fmt --check"]
+
+[tasks.lint]
+description = "Strict clippy (all targets, warnings are errors) and Vite+ lint"
+alias = "l"
+outputs = []
+run = [
+  "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+  "vp lint",
+]
+
+[tasks.doc]
+description = "Build rustdoc with warnings as errors"
+outputs = []
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = "cargo doc --workspace --no-deps"
+
+[tasks.audit]
+description = "Check Cargo.lock against the RustSec advisory database"
+outputs = []
+run = "cargo audit"
+
+# ------------------------------------------------------------- #
+#                            Testing                            #
+# ------------------------------------------------------------- #
+
+[tasks."test:rust"]
+description = "Rust unit, integration and doc tests"
+outputs = []
+run = "cargo test --workspace"
+
+# The TypeScript tests spawn the habit-hooks binary that `test:rust` builds.
+[tasks."test:ts"]
+description = "TypeScript extension tests through Vite+ (Vitest)"
+depends = ["test:rust"]
+outputs = []
+run = "vp test run"
+
+[tasks.test]
+description = "All tests"
+alias = "t"
+depends = ["test:ts"]
+outputs = []
+run = "echo tests passed"
+
+[tasks.ci]
+description = "Everything CI-equivalent: format check, lint, type check, tests"
+depends = ["fmt:check", "lint", "typecheck", "test"]
+outputs = []
+run = "echo ci passed"

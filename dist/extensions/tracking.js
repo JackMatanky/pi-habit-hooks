@@ -62,11 +62,11 @@ export function callKey(event, agentRoot) {
  * firing switched on.
  */
 export function tracking(cwd, agentId) {
-    return (modeFor(cwd, agentId) !== "off" && existsSync(join(cwd, "Cargo.toml")));
+    return modeFor(cwd, agentId) !== "off" && existsSync(join(cwd, "Cargo.toml"));
 }
 /** The fire mode that applies to this agent: its own override, else the global one. */
 export function modeFor(cwd, agentId) {
-    return (getOwnership(resolveRoot(agentId), getRepoRoot(cwd)).mode ?? getMode());
+    return getOwnership(resolveRoot(agentId), getRepoRoot(cwd)).mode ?? getMode();
 }
 /**
  * An agent's own files if it wrote any, else the whole working tree plus a hint

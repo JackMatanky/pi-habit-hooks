@@ -8,7 +8,10 @@ export function git(cwd: string, ...args: string[]): void {
 }
 
 /** A temp git repo whose `files` are committed on `main`; the caller removes it. */
-export function initRepo(prefix: string, files: Record<string, string>): string {
+export function initRepo(
+  prefix: string,
+  files: Record<string, string>,
+): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   git(dir, "init", "-q", "-b", "main");
   git(dir, "config", "user.email", "t@example.com");
@@ -24,6 +27,9 @@ export function initRepo(prefix: string, files: Record<string, string>): string 
 
 /** Never read or write the developer's real ~/.config/habit-hooks/mode (`/habit-hooks off` persists). */
 export function isolateModeFile(): void {
-  process.env.HABIT_HOOKS_MODE_FILE = join(mkdtempSync(join(tmpdir(), "habit-hooks-mode-")), "mode");
+  process.env.HABIT_HOOKS_MODE_FILE = join(
+    mkdtempSync(join(tmpdir(), "habit-hooks-mode-")),
+    "mode",
+  );
   delete process.env.HABIT_HOOKS_MODE;
 }

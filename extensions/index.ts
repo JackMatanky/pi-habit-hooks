@@ -1,12 +1,4 @@
 import {
-  callKey,
-  classifyCall,
-  modeFor,
-  runWorkingFor,
-  SYSTEM_GUIDELINES,
-  tracking,
-} from "./tracking.js";
-import {
   closeWindow,
   getOwnership,
   getRepoRoot,
@@ -29,6 +21,14 @@ import {
   type FireMode,
 } from "./policy.js";
 import { defaultTimeoutMs, runHabitHooks, runHabitSnooze } from "./runner.js";
+import {
+  callKey,
+  classifyCall,
+  modeFor,
+  runWorkingFor,
+  SYSTEM_GUIDELINES,
+  tracking,
+} from "./tracking.js";
 
 const MODE_DESCRIPTIONS: Record<FireMode, string> = {
   off: "never automatically (the tools and /habit-hooks still work when invoked)",
@@ -159,7 +159,7 @@ export async function validateUnwrapWithLaya(
 
 export { classifyCall, isReadOnlyCommand } from "./tracking.js";
 
-export default function(pi: PiAgentHost) {
+export default function (pi: PiAgentHost) {
   // One labelled line under the editor, like other packages: "habit-hooks: turn · ⚠️ 3 smell(s)".
   // Shown only once a Rust project is known; `off` shows just the mode so it is obvious why nothing fires.
   let badgeVisible = false;
@@ -212,27 +212,25 @@ export default function(pi: PiAgentHost) {
       scope === "working" && !files?.length && !fix
         ? await runWorkingFor(cwd, signal, ctx?.agent?.id)
         : {
-          result: await policy.exclusive(cwd, () =>
-            runHabitHooks({
-              scope,
-              sinceRef,
-              files,
-              fix,
-              cwd,
-              signal,
-            }),
-          ),
-          advice: undefined,
-        };
+            result: await policy.exclusive(cwd, () =>
+              runHabitHooks({
+                scope,
+                sinceRef,
+                files,
+                fix,
+                cwd,
+                signal,
+              }),
+            ),
+            advice: undefined,
+          };
     setBadge(ctx, statusText(classify(result), result.output));
 
     return {
       content: [
         {
           type: "text",
-          text: advice
-            ? `${result.output}\n${advice}`
-            : result.output,
+          text: advice ? `${result.output}\n${advice}` : result.output,
         },
       ],
       details: {
@@ -258,8 +256,7 @@ export default function(pi: PiAgentHost) {
         scope: {
           type: "string",
           enum: ["working", "staged", "all", "since"],
-          description:
-            "Scope of files to scan. Defaults to 'working'.",
+          description: "Scope of files to scan. Defaults to 'working'.",
           default: "working",
         },
         sinceRef: {
@@ -322,8 +319,7 @@ export default function(pi: PiAgentHost) {
         },
         inputJson: {
           type: "string",
-          description:
-            "JSON array of findings to snooze when action is 'add'.",
+          description: "JSON array of findings to snooze when action is 'add'.",
         },
       },
       required: ["action"],
@@ -343,9 +339,7 @@ export default function(pi: PiAgentHost) {
       const reason =
         typeof params.reason === "string" ? params.reason : undefined;
       const inputJson =
-        typeof params.inputJson === "string"
-          ? params.inputJson
-          : undefined;
+        typeof params.inputJson === "string" ? params.inputJson : undefined;
 
       const result = runHabitSnooze({
         action,
@@ -370,8 +364,7 @@ export default function(pi: PiAgentHost) {
         typeof args.action === "string"
           ? (args.action as "list" | "add" | "prune")
           : "list";
-      const reason =
-        typeof args.reason === "string" ? args.reason : undefined;
+      const reason = typeof args.reason === "string" ? args.reason : undefined;
       const inputJson =
         typeof args.inputJson === "string" ? args.inputJson : undefined;
 
@@ -396,10 +389,7 @@ export default function(pi: PiAgentHost) {
     const registerCmd = (
       name: string,
       description: string,
-      handler: (
-        args: string,
-        context?: ExtensionContext,
-      ) => Promise<void>,
+      handler: (args: string, context?: ExtensionContext) => Promise<void>,
     ) => {
       try {
         if (typeof pi.registerCommand === "function") {
@@ -430,10 +420,8 @@ export default function(pi: PiAgentHost) {
         if (mode && words.includes("--agent")) {
           // this agent in this repo only, in memory; the global mode and other agents are untouched
           const cwd = context?.cwd ?? process.cwd();
-          getOwnership(
-            resolveRoot(context?.agent?.id),
-            getRepoRoot(cwd),
-          ).mode = mode;
+          getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd)).mode =
+            mode;
           renderBadge(context);
           context?.ui?.log?.(
             `Habit Hooks now fires ${MODE_DESCRIPTIONS[mode]} for this agent only. Not saved; /habit-hooks default --agent restores the global mode.`,
@@ -442,10 +430,8 @@ export default function(pi: PiAgentHost) {
         }
         if (word === "default" && words.includes("--agent")) {
           const cwd = context?.cwd ?? process.cwd();
-          getOwnership(
-            resolveRoot(context?.agent?.id),
-            getRepoRoot(cwd),
-          ).mode = undefined;
+          getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd)).mode =
+            undefined;
           renderBadge(context);
           context?.ui?.log?.(
             `This agent follows the global mode again (${getMode()}).`,
@@ -521,19 +507,14 @@ export default function(pi: PiAgentHost) {
     pi.on("session_start", (_event, ctx) => {
       const cwd = ctx?.cwd ?? process.cwd();
       const agent = ctx?.agent;
-      if (agent?.id && agent.parentId)
-        registerAgent(agent.id, agent.parentId);
+      if (agent?.id && agent.parentId) registerAgent(agent.id, agent.parentId);
       badgeVisible = isRustProject(cwd);
       // A root session rebuilds what it owns from its own branch, so ownership survives resume and rewind.
       // A subagent's files belong to its root, whose branch it must not overwrite.
       if (badgeVisible && !agent?.parentId) {
         const branch = ctx?.sessionManager?.getBranch?.();
         if (Array.isArray(branch))
-          rebuildFromBranch(
-            resolveRoot(agent?.id),
-            getRepoRoot(cwd),
-            branch,
-          );
+          rebuildFromBranch(resolveRoot(agent?.id), getRepoRoot(cwd), branch);
       }
       lastResult = undefined;
       renderBadge(ctx);
@@ -558,9 +539,7 @@ export default function(pi: PiAgentHost) {
       const prompt = event.systemPrompt;
       if (Array.isArray(prompt)) {
         if (
-          !prompt.some((b) =>
-            b.includes("Habit Hooks Quality Coaching Rules"),
-          )
+          !prompt.some((b) => b.includes("Habit Hooks Quality Coaching Rules"))
         ) {
           return { systemPrompt: [...prompt, SYSTEM_GUIDELINES] };
         }
@@ -633,12 +612,7 @@ export default function(pi: PiAgentHost) {
         typeof file === "string" &&
         /\.rs$/i.test(file)
       ) {
-        const scan = await policy.scanEdited(
-          cwd,
-          file,
-          ctx?.signal,
-          agentId,
-        );
+        const scan = await policy.scanEdited(cwd, file, ctx?.signal, agentId);
         if (scan.status !== undefined) setBadge(ctx, scan.status);
         if (scan.output)
           additionalContext = `⚠️ Habit Hooks coaching feedback for ${file}:\n\n${scan.output}`;

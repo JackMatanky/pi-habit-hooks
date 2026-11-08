@@ -1,14 +1,17 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { initRepo, isolateModeFile } from "./helpers.js";
-import registerExtension from "../extensions/index.js";
-import { FirePolicy } from "../extensions/policy.js";
 import type {
   HabitHooksResult,
   RunHabitHooksOptions,
 } from "../extensions/runner.js";
+
+import assert from "node:assert/strict";
+import { rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { test } from "vitest";
+
+import registerExtension from "../extensions/index.js";
+import { FirePolicy } from "../extensions/policy.js";
+import { initRepo, isolateModeFile } from "./helpers.js";
 
 isolateModeFile();
 
@@ -32,7 +35,7 @@ async function withRepo(body: (dir: string) => Promise<void>): Promise<void> {
 function extension() {
   const handlers: Record<string, Handler[]> = {};
   registerExtension({
-    registerTool: () => { },
+    registerTool: () => {},
     on: (event: string, handler: Function) => {
       (handlers[event] ??= []).push(handler as Handler);
     },
@@ -66,11 +69,16 @@ function fakeCli() {
     scopes.push((options.files ?? ["<whole tree>"]).join());
     return options.files?.includes("src/a.rs")
       ? {
-        exitCode: 1,
-        passed: false,
-        output: "### too-many-parameters\n- src/a.rs:1: too many parameters\n",
-        report: { enforcedFiles: ["src/a.rs"], incompleteRun: false, smellCount: 1 },
-      }
+          exitCode: 1,
+          passed: false,
+          output:
+            "### too-many-parameters\n- src/a.rs:1: too many parameters\n",
+          report: {
+            enforcedFiles: ["src/a.rs"],
+            incompleteRun: false,
+            smellCount: 1,
+          },
+        }
       : { exitCode: 0, passed: true, output: "" };
   };
   return { run, scopes };

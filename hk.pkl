@@ -1,0 +1,151 @@
+amends "package://github.com/jdx/hk/releases/download/v2.0.0/hk@2.0.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.0.0/hk@2.0.0#/Builtins.pkl"
+
+fail_fast = false
+
+exclude = List(
+    "target",
+    "vendor",
+    ".direnv",
+    ".venv",
+    "node_modules",
+    "dist",
+    "build",
+    "LICENSE",
+    ".scratch",
+    ".agents",
+    ".mise",
+    ".pi"
+)
+
+local hygiene = new Mapping<String, Step> {
+    ["end-of-file-fixer"] = Builtins.newlines
+    ["trailing-whitespace"] = Builtins.trailing_whitespace
+    ["mixed-line-ending"] = Builtins.mixed_line_ending
+}
+
+local data_formats = new Mapping<String, Step> {
+    // syntax only: Vite+ (vp-fmt) owns JSON layout, so jq must not reformat
+    ["check-json"] = new Step {
+        glob = List("**/*.json")
+        exclude = List("package-lock.json")
+        check = "jq empty {{files}}"
+    }
+    ["tombi-format"] = Builtins.tombi_format
+}
+
+// Vite+ owns TypeScript/JavaScript formatting and linting. Generated output
+// and the Rust-side fixtures are outside its scope (see vite.config.ts).
+local ts_glob = List("**/*.ts", "**/*.mts", "**/*.js", "**/*.mjs", "**/*.json")
+local ts_exclude = List("crates/**", "plugins/**", "dist/**", "package-lock.json")
+
+local typescript_format = new Mapping<String, Step> {
+    ["vp-fmt"] = new Step {
+        glob = ts_glob
+        exclude = ts_exclude
+        check = "vp fmt --check {{files}}"
+        fix = "vp fmt --write {{files}}"
+    }
+}
+
+local vcs = new Mapping<String, Step> {
+    ["check-added-large-files"] = Builtins.check_added_large_files
+    ["check-case-conflict"] = Builtins.check_case_conflict
+    ["check-executables-have-shebangs"] = Builtins.check_executables_have_shebangs
+    ["check-merge-conflict"] = Builtins.check_merge_conflict
+    ["check-symlinks"] = Builtins.check_symlinks
+}
+
+local security = new Mapping<String, Step> {
+    ["detect-private-key"] = Builtins.detect_private_key
+    ["cargo-audit"] = new Step {
+        glob = List("**/Cargo.lock")
+        check = new Command {
+            argv = List("cargo", "audit")
+        }
+    }
+    ["gitleaks"] = (Builtins.gitleaks) {
+        check = "for file in {{files}}; do gitleaks dir --redact --no-banner --log-level error \"$file\" || exit $?; done"
+    }
+}
+
+local formatting =
+    hygiene +
+    data_formats +
+    typescript_format +
+    new Mapping<String, Step> {
+        ["cargo-fmt"] = Builtins.cargo_fmt
+    }
+
+local validation =
+    vcs +
+    new Mapping<String, Step> {
+        ["tombi"] = Builtins.tombi
+        ["vp-lint"] = new Step {
+            glob = List("**/*.ts", "**/*.mts", "**/*.js", "**/*.mjs")
+            exclude = ts_exclude
+            check = "vp lint {{files}}"
+        }
+    }
+
+local quality = new Mapping<String, Step> {
+    ["cargo-clippy"] = new Step {
+        glob = List("**/*.rs", "**/Cargo.toml", "**/Cargo.lock", "clippy.toml")
+        check = "mise run lint"
+    }
+    ["cargo-test"] = new Step {
+        glob = List("**/*.rs", "**/Cargo.toml", "**/Cargo.lock", "extensions/**", "tests/**", "vite.config.ts")
+        check = "mise run test"
+    }
+    ["cargo-doc"] = new Step {
+        glob = List("**/*.rs", "**/Cargo.toml")
+        check = "mise run doc"
+    }
+    ["typecheck"] = new Step {
+        glob = List("extensions/**/*.ts", "tests/**/*.ts", "tsconfig*.json", "vite.config.ts")
+        check = "mise run typecheck"
+    }
+}
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps = new Mapping<String, Step | Group> {
+            ["format"] = new Group { steps = formatting }
+            ["validate"] = new Group { steps = validation }
+        }
+    }
+
+    ["pre-push"] {
+        steps = new Mapping<String, Step | Group> {
+            ["validate"] = new Group { steps = validation }
+            ["security"] = new Group { steps = security }
+            ["quality"] = new Group { steps = quality }
+        }
+    }
+
+    ["commit-msg"] {
+        steps = new Mapping<String, Step> {
+            ["conventional-commit"] = (Builtins.check_conventional_commit) {
+                check = new Command {
+                    argv = List("hk", "util", "check-conventional-commit", "--verbose", "{{commit_msg_file}}")
+                }
+            }
+        }
+    }
+
+    ["fix"] {
+        fix = true
+        steps = formatting
+    }
+
+    ["check"] {
+        steps = new Mapping<String, Step | Group> {
+            ["format"] = new Group { steps = formatting }
+            ["validate"] = new Group { steps = validation }
+            ["security"] = new Group { steps = security }
+            ["quality"] = new Group { steps = quality }
+        }
+    }
+}

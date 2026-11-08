@@ -1,5 +1,5 @@
-import { type FireMode } from "./policy.js";
 import type { HabitHooksResult } from "./runner.js";
+import { type FireMode } from "./policy.js";
 export declare const SYSTEM_GUIDELINES = "\n## Habit Hooks Quality Coaching Rules\n1. Before completing a turn that modifies Rust source files, run 'habit_hooks' to ensure no code smells were introduced.\n2. If violations are reported, refactor the code according to the outcome-oriented guidance before yielding.\n3. If suppression is strictly necessary (e.g. FFI boundary), always use scoped '#[expect(lint, reason = \"...\")]' with an explicit technical justification. NEVER use '#![allow(...)]' at the crate or module level.\n4. If a smell cannot be immediately refactored, use 'habit_snooze' with an explicit reason. Note that snoozes lapse automatically whenever the affected file is modified.\n";
 /** Conservative: unknown, redirected, in-place or `--fix` commands count as writers. */
 export declare function isReadOnlyCommand(command: string): boolean;
