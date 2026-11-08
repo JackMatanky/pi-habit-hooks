@@ -10,7 +10,7 @@ map(select(.lines > (.threshold // 500)))
           details: {
             file: .file,
             line: .lines,
-            message: ("File length (" + (.lines | tostring) + " lines) exceeds threshold of " + ((.threshold // 500) | tostring) + " lines"),
+            message: ("File has " + (.lines | tostring) + " lines of code (comments and blank lines not counted), above the threshold of " + ((.threshold // 500) | tostring)),
             source: "line-count"
           }
         })

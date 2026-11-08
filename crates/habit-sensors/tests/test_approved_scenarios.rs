@@ -114,7 +114,7 @@ fn verifies_line_count_scenario_against_approved_json() {
     plugin_cfg.sensors.retain(|s| s.name == "line-count");
 
     let sample_file =
-        "plugins/generic/scenarios/line-count/sample/big.txt".to_string();
+        "plugins/generic/scenarios/line-count/sample/big.js".to_string();
     let scope_args = ScopeArgs {
         files: vec![sample_file],
         ..Default::default()

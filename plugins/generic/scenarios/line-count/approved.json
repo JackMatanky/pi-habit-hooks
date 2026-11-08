@@ -4,11 +4,11 @@
     "details": {},
     "issues": [
       {
-        "key": "plugins/generic/scenarios/line-count/sample/big.txt",
+        "key": "plugins/generic/scenarios/line-count/sample/big.js",
         "details": {
-          "file": "plugins/generic/scenarios/line-count/sample/big.txt",
-          "line": 551,
-          "message": "File length (551 lines) exceeds threshold of 500 lines",
+          "file": "plugins/generic/scenarios/line-count/sample/big.js",
+          "line": 520,
+          "message": "File has 520 lines of code (comments and blank lines not counted), above the threshold of 500",
           "source": "line-count"
         }
       }
