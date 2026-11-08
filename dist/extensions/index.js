@@ -1,44 +1,12 @@
-import { spawnSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { runHabitHooks, runHabitSnooze } from "./runner.js";
-function hasRustFiles(root) {
-    if (!fs.existsSync(path.join(root, "Cargo.toml")))
-        return false;
-    const dirs = [root];
-    while (dirs.length) {
-        const dir = dirs.pop();
-        let entries;
-        try {
-            entries = fs.readdirSync(dir, { withFileTypes: true });
-        }
-        catch {
-            continue;
-        }
-        for (const entry of entries) {
-            if (entry.isFile() && entry.name.endsWith(".rs"))
-                return true;
-            if (entry.isDirectory() && ![".git", ".habit-hooks", "target", "node_modules"].includes(entry.name)) {
-                dirs.push(path.join(dir, entry.name));
-            }
-        }
-    }
-    return false;
-}
-function hasChangedRustFiles(cwd) {
-    const status = spawnSync("git", ["status", "--porcelain", "-z", "--untracked-files=all", "--", "*.rs"], {
-        cwd,
-        encoding: "utf-8",
-    });
-    return status.status !== 0 || status.stdout.length > 0;
-}
-const SYSTEM_GUIDELINES = `
-## Habit Hooks Quality Coaching Rules
-1. Before completing a turn that modifies Rust source files, run 'habit_hooks' to ensure no code smells were introduced.
-2. If violations are reported, refactor the code according to the outcome-oriented guidance before yielding.
-3. If suppression is strictly necessary (e.g. FFI boundary), always use scoped '#[expect(lint, reason = "...")]' with an explicit technical justification. NEVER use '#![allow(...)]' at the crate or module level.
-4. If a smell cannot be immediately refactored, use 'habit_snooze' with an explicit reason. Note that snoozes lapse automatically whenever the affected file is modified.
-`;
+import { callKey, classifyCall, runWorkingFor, SYSTEM_GUIDELINES, tracking } from "./tracking.js";
+import { closeWindow, getOwnership, getRepoRoot, openWindow, rebuildFromBranch, registerAgent, resolveRoot, toRepoPath, unregisterAgent, } from "./ownership.js";
+import { getMode, isRustProject, modeFile, parseMode, persistMode, policy, statusText, classify } from "./policy.js";
+import { defaultTimeoutMs, runHabitHooks, runHabitSnooze } from "./runner.js";
+const MODE_DESCRIPTIONS = {
+    off: "never automatically (the tools and /habit-hooks still work when invoked)",
+    turn: "once when the session tries to stop, only if Rust files changed",
+    edit: "after every Rust edit, and once when the session tries to stop",
+};
 export async function validateUnwrapWithLaya(finding, pi) {
     if (finding.smell !== "unhandled-unwrap" || typeof pi.callTool !== "function") {
         return undefined;
@@ -54,7 +22,7 @@ export async function validateUnwrapWithLaya(finding, pi) {
                     criteria: { safe: "The unwrap is safely guarded", unsafe: "The unwrap may panic" },
                 },
             },
-        }));
+        })); // MCP result shape is not typed by the host
         if (resp?.answers?.is_safe?.choice === "safe" && (resp.answers.is_safe.confidence ?? 0) >= 0.6) {
             return true;
         }
@@ -64,7 +32,52 @@ export async function validateUnwrapWithLaya(finding, pi) {
     }
     return false;
 }
+export { classifyCall, isReadOnlyCommand } from "./tracking.js";
 export default function (pi) {
+    // One labelled line under the editor, like other packages: "habit-hooks: turn · ⚠️ 3 smell(s)".
+    // Shown only once a Rust project is known; `off` shows just the mode so it is obvious why nothing fires.
+    let badgeVisible = false;
+    let lastResult;
+    const renderBadge = (ctx) => {
+        let line;
+        if (badgeVisible) {
+            const own = getOwnership(resolveRoot(ctx?.agent?.id), getRepoRoot(ctx?.cwd ?? process.cwd()));
+            const mode = own.mode ?? getMode();
+            const files = own.hard.size + own.soft.size;
+            line = `habit-hooks: ${mode}`;
+            if (mode !== "off" && files > 0)
+                line += ` · ${files} file${files === 1 ? "" : "s"}`;
+            if (mode !== "off" && lastResult)
+                line += ` · ${lastResult}`;
+        }
+        (ctx?.ui ?? pi.ui)?.setStatus?.("habit-hooks", line);
+    };
+    const setBadge = (ctx, text) => {
+        if (text !== undefined)
+            badgeVisible = true;
+        lastResult = text;
+        renderBadge(ctx);
+    };
+    // Shared by `execute` (Pi) and `handler` (OMP). Working-tree runs share one cached run per project.
+    const runTool = async (params, ctx, signal = ctx?.signal) => {
+        const cwd = ctx?.cwd ?? process.cwd();
+        const scope = typeof params.scope === "string" ? params.scope : "working";
+        const sinceRef = typeof params.sinceRef === "string" ? params.sinceRef : undefined;
+        const files = Array.isArray(params.files) ? params.files : undefined;
+        const fix = typeof params.fix === "boolean" ? params.fix : false;
+        setBadge(ctx, "⏳ habit-hooks…");
+        const { result, advice } = scope === "working" && !files?.length && !fix
+            ? await runWorkingFor(cwd, signal, ctx?.agent?.id)
+            : { result: await policy.exclusive(cwd, () => runHabitHooks({ scope, sinceRef, files, fix, cwd, signal })), advice: undefined };
+        setBadge(ctx, statusText(classify(result), result.output));
+        return {
+            content: [{ type: "text", text: advice ? `${result.output}\n${advice}` : result.output }],
+            details: { exitCode: result.exitCode, passed: result.passed, timedOut: result.timedOut ?? false },
+            exitCode: result.exitCode,
+            passed: result.passed,
+            guidance: result.output,
+        };
+    };
     // 1. Register habit_hooks tool
     pi.registerTool({
         name: "habit_hooks",
@@ -96,56 +109,12 @@ export default function (pi) {
             },
         },
         // Standard Pi/OMP execute method
-        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-            const cwd = ctx?.cwd ?? process.cwd();
-            const scope = typeof params.scope === "string" ? params.scope : "working";
-            const sinceRef = typeof params.sinceRef === "string" ? params.sinceRef : undefined;
-            const files = Array.isArray(params.files) ? params.files : undefined;
-            const fix = typeof params.fix === "boolean" ? params.fix : false;
-            const result = runHabitHooks({
-                scope,
-                sinceRef,
-                files,
-                fix,
-                cwd,
-            });
-            if (ctx?.ui?.setStatus) {
-                const statusText = result.passed ? "✅ clean" : "⚠️ coaching active";
-                ctx.ui.setStatus("habit-hooks", statusText);
-            }
-            return {
-                content: [{ type: "text", text: result.output }],
-                details: { exitCode: result.exitCode, passed: result.passed },
-                exitCode: result.exitCode,
-                passed: result.passed,
-                guidance: result.output,
-            };
+        async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+            return runTool(params, ctx, signal ?? ctx?.signal);
         },
         // Backward-compatible handler method
         async handler(args, context) {
-            const cwd = context?.cwd ?? process.cwd();
-            const scope = typeof args.scope === "string" ? args.scope : "working";
-            const sinceRef = typeof args.sinceRef === "string" ? args.sinceRef : undefined;
-            const files = Array.isArray(args.files) ? args.files : undefined;
-            const fix = typeof args.fix === "boolean" ? args.fix : false;
-            const result = runHabitHooks({
-                scope,
-                sinceRef,
-                files,
-                fix,
-                cwd,
-            });
-            if (context?.ui?.setStatus) {
-                const statusText = result.passed ? "✅ clean" : "⚠️ coaching active";
-                context.ui.setStatus("habit-hooks", statusText);
-            }
-            return {
-                content: [{ type: "text", text: result.output }],
-                details: { exitCode: result.exitCode, passed: result.passed },
-                exitCode: result.exitCode,
-                passed: result.passed,
-                guidance: result.output,
-            };
+            return runTool(args, context);
         },
     });
     // 2. Register habit_snooze tool
@@ -235,11 +204,38 @@ export default function (pi) {
                 }
             }
         };
-        registerCmd("habit-hooks", "Run Habit Hooks coaching checks on working tree", async (args, context) => {
+        registerCmd("habit-hooks", "Run Habit Hooks, or choose when it fires: /habit-hooks [--all | status | off | turn | edit]", async (args, context) => {
+            const word = args.trim().split(/\s+/)[0];
+            const mode = parseMode(word);
+            if (mode) {
+                persistMode(mode);
+                renderBadge(context);
+                context?.ui?.log?.(`Habit Hooks now fires ${MODE_DESCRIPTIONS[mode]}. Saved to ${modeFile()}; also applies to the pre-commit hook.`);
+                return;
+            }
+            if (word === "status") {
+                const cwd = context?.cwd ?? process.cwd();
+                const own = getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd));
+                const list = (files) => [...files].join(", ") || "none";
+                const last = own.lastGateOutcome;
+                context?.ui?.log?.([
+                    `Habit Hooks fires ${MODE_DESCRIPTIONS[own.mode ?? getMode()]}. Run timeout ${Math.round(defaultTimeoutMs() / 1000)}s (HABIT_HOOKS_TIMEOUT_MS).`,
+                    `Rust files this agent wrote (checked and enforced): ${list(own.hard.keys())}`,
+                    `Rust files shared with another agent's overlapping tool call (checked, never enforced): ${list(own.soft.keys())}`,
+                    last
+                        ? `Last gate: ${last.action}, ${last.smellCount} smell(s), ${last.durationMs}ms, ${new Date(last.at).toLocaleTimeString()}`
+                        : "Last gate: none yet",
+                ].join("\n"));
+                return;
+            }
             const cwd = context?.cwd ?? process.cwd();
-            const scope = args.includes("--all") ? "all" : "working";
-            const result = runHabitHooks({ scope, cwd });
-            context?.ui?.log?.(result.output);
+            if (args.includes("--all")) {
+                const result = await policy.exclusive(cwd, () => runHabitHooks({ scope: "all", cwd, signal: context?.signal }));
+                context?.ui?.log?.(result.output);
+                return;
+            }
+            const { result, advice } = await runWorkingFor(cwd, context?.signal, context?.agent?.id);
+            context?.ui?.log?.(advice ? `${result.output}\n${advice}` : result.output);
         });
         registerCmd("snooze", "Manage Habit Hooks snoozed exemptions", async (args, context) => {
             const cwd = context?.cwd ?? process.cwd();
@@ -248,11 +244,33 @@ export default function (pi) {
             context?.ui?.log?.(result.output);
         });
     }
-    // Only introduce automatic coaching instructions in an active Rust project.
     if (typeof pi.on === "function") {
+        pi.on("session_start", (_event, ctx) => {
+            const cwd = ctx?.cwd ?? process.cwd();
+            const agent = ctx?.agent;
+            if (agent?.id && agent.parentId)
+                registerAgent(agent.id, agent.parentId);
+            badgeVisible = isRustProject(cwd);
+            // A root session rebuilds what it owns from its own branch, so ownership survives resume and rewind.
+            // A subagent's files belong to its root, whose branch it must not overwrite.
+            if (badgeVisible && !agent?.parentId) {
+                const branch = ctx?.sessionManager?.getBranch?.();
+                if (Array.isArray(branch))
+                    rebuildFromBranch(resolveRoot(agent?.id), getRepoRoot(cwd), branch);
+            }
+            lastResult = undefined;
+            renderBadge(ctx);
+        });
+        pi.on("session_shutdown", (_event, ctx) => {
+            unregisterAgent(ctx?.agent?.id ?? "main");
+        });
+        // 4. Coaching instructions: only for the main agent, only in a Rust project, never when firing is off.
         pi.on("before_agent_start", (event, ctx) => {
+            if (event?.reason === "revive" || ctx?.agent?.kind === "sub" || getMode() === "off")
+                return;
             const cwd = ctx?.cwd ?? event?.cwd ?? process.cwd();
-            if (!hasRustFiles(cwd))
+            policy.resetBlocks(cwd, ctx?.agent?.id); // every user prompt gets a fresh gate budget
+            if (!isRustProject(cwd))
                 return;
             const prompt = event.systemPrompt;
             if (Array.isArray(prompt)) {
@@ -266,59 +284,70 @@ export default function (pi) {
                 }
             }
         });
-    }
-    // 5. Event-Driven Lifecycle: tool_call incremental scan & status badge update
-    if (typeof pi.on === "function") {
-        pi.on("tool_call", async (data, ctxArg) => {
-            const toolName = data?.tool ?? data?.name ?? data?.toolName;
-            const params = data?.params ?? data?.input ?? data?.args;
-            const filePath = params?.path ?? params?.filePath ?? params?.file;
-            if (!filePath || typeof filePath !== "string") {
+        // 5. Attribution, part one: a tool call opens a window so what it writes can be told from other agents' writes.
+        // Nothing is checked here: tool_call is pre-exec, so a scan would read the file before the edit lands.
+        pi.on("tool_call", async (event, ctx) => {
+            const cwd = ctx?.cwd ?? process.cwd();
+            if (!tracking(cwd))
                 return;
-            }
-            const isEditOrWrite = toolName === "edit" || toolName === "write" || !toolName;
-            const isTargetLang = /\.rs$/i.test(filePath);
-            if (isEditOrWrite && isTargetLang) {
-                const ctx = ctxArg ?? data?.ctx;
-                const cwd = ctx?.cwd ?? data?.cwd ?? process.cwd();
-                if (!hasRustFiles(cwd))
-                    return;
-                const result = runHabitHooks({ scope: "working", files: [filePath], cwd });
-                const smellHeaders = (result.output.match(/^###\s+[a-z0-9-]+/gm) || []).length;
-                const count = smellHeaders > 0 ? smellHeaders : (result.passed ? 0 : 1);
-                const setStatus = ctx?.ui?.setStatus ?? pi.ui?.setStatus;
-                if (typeof setStatus === "function") {
-                    const statusText = result.passed && count === 0 ? "✅ clean" : `⚠️ ${count} smell(s)`;
-                    setStatus("habit-hooks", statusText);
-                }
-                if (!result.passed && count > 0) {
-                    return {
-                        additionalContext: `⚠️ Habit Hooks coaching feedback for ${filePath}:\n\n${result.output}`,
-                    };
-                }
-            }
+            const toolName = event?.toolName ?? event?.tool;
+            const call = classifyCall(toolName, event?.input ?? event?.params ?? event?.args);
+            const agentRoot = resolveRoot(ctx?.agent?.id);
+            await openWindow(agentRoot, getRepoRoot(cwd), callKey(event, agentRoot), call.readOnly, !call.directPath);
         });
-        // 6. Pre-Yield Quality Gate: turn_end / before_yield / session_stop intercept
-        const preYieldGateHandler = (data, ctxArg) => {
+        // 6. Attribution, part two, then (`edit` mode only) the scan. tool_result is post-exec, so the scan sees the edited file.
+        pi.on("tool_result", async (event, ctx) => {
+            const cwd = ctx?.cwd ?? process.cwd();
+            const agentId = ctx?.agent?.id;
+            const toolName = event?.toolName ?? event?.tool;
+            const input = event?.input ?? event?.params ?? event?.args;
+            let details;
+            if (tracking(cwd)) {
+                const repoRoot = getRepoRoot(cwd);
+                const agentRoot = resolveRoot(agentId);
+                const { directPath } = classifyCall(toolName, input);
+                // a failed edit wrote nothing; a failed shell command may still have, which the snapshot diff catches
+                const direct = directPath && !event?.isError ? toRepoPath(cwd, repoRoot, directPath) : undefined;
+                const owned = await closeWindow(agentRoot, repoRoot, callKey(event, agentRoot), direct);
+                if (owned.hard.length || owned.soft.length) {
+                    // persisted on the session branch, which is how ownership survives a resume
+                    details = { ...event?.details, habitHooks: owned };
+                    if (badgeVisible)
+                        renderBadge(ctx);
+                }
+            }
+            let additionalContext;
+            const file = input?.path ?? input?.filePath ?? input?.file;
+            if (getMode() === "edit" &&
+                ctx?.agent?.kind !== "sub" &&
+                !event?.isError &&
+                (toolName === "edit" || toolName === "write") &&
+                typeof file === "string" &&
+                /\.rs$/i.test(file)) {
+                const scan = await policy.scanEdited(cwd, file, ctx?.signal, agentId);
+                if (scan.status !== undefined)
+                    setBadge(ctx, scan.status);
+                if (scan.output)
+                    additionalContext = `⚠️ Habit Hooks coaching feedback for ${file}:\n\n${scan.output}`;
+            }
+            if (details || additionalContext)
+                return { ...(details && { details }), ...(additionalContext && { additionalContext }) };
+        });
+        // 7. The gate. session_stop is the main-session stop hook (awaited, never fired for subagents).
+        // turn_end/agent_end are per-turn notifications whose results the hosts ignore, so nothing runs there.
+        pi.on("session_stop", async (data, ctxArg) => {
             const ctx = ctxArg ?? data?.ctx;
             const cwd = ctx?.cwd ?? data?.cwd ?? process.cwd();
-            if (!hasRustFiles(cwd) || !hasChangedRustFiles(cwd)) {
+            const outcome = await policy.gate(cwd, ctx?.signal, ctx?.agent?.id);
+            setBadge(ctx, outcome.status);
+            if (!outcome.block)
                 return { interrupt: false };
-            }
-            const result = runHabitHooks({ scope: "working", cwd });
-            if (result.exitCode === 1) {
-                const feedback = `⚠️ Habit Hooks Quality Gate: Enforced code smell detected...\n\n${result.output}\n\nPlease refactor before completing.`;
-                return {
-                    interrupt: true,
-                    decision: "block",
-                    reason: feedback,
-                    message: feedback,
-                };
-            }
-            return { interrupt: false };
-        };
-        pi.on("turn_end", preYieldGateHandler);
-        pi.on("before_yield", preYieldGateHandler);
-        pi.on("session_stop", preYieldGateHandler);
+            return {
+                interrupt: true,
+                decision: "block",
+                reason: outcome.feedback,
+                message: outcome.feedback,
+            };
+        });
     }
 }

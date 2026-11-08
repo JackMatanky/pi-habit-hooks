@@ -4,18 +4,55 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveBinary, runHabitHooks, runHabitSnooze } from "../extensions/runner.js";
+import { modeFile, setMode } from "../extensions/policy.js";
 import registerExtension, { validateUnwrapWithLaya } from "../extensions/index.js";
+// Never read or write the developer's real ~/.config/habit-hooks/mode (`/habit-hooks off` persists).
+process.env.HABIT_HOOKS_MODE_FILE = join(mkdtempSync(join(tmpdir(), "habit-hooks-mode-")), "mode");
+delete process.env.HABIT_HOOKS_MODE;
+function host(extra = {}) {
+    const handlers = {};
+    const statuses = [];
+    const pi = {
+        registerTool: () => { },
+        ui: {
+            setStatus: (_key, value) => {
+                statuses.push(value);
+            },
+        },
+        on: (event, handler) => {
+            handlers[event] = handlers[event] || [];
+            handlers[event].push(handler);
+        },
+        ...extra,
+    };
+    return { pi, handlers, statuses };
+}
+function tempProject(files) {
+    const dir = mkdtempSync(join(tmpdir(), "habit-hooks-ext-"));
+    for (const [name, body] of Object.entries(files)) {
+        mkdirSync(join(dir, name, ".."), { recursive: true });
+        writeFileSync(join(dir, name), body);
+    }
+    return dir;
+}
 test("resolveBinary resolves built CLI binaries", () => {
     const binaryHooks = resolveBinary("habit-hooks");
     assert.ok(binaryHooks.includes("habit-hooks"));
     const binaryJudge = resolveBinary("habit-judge");
     assert.ok(binaryJudge.includes("habit-judge"));
 });
-test("runHabitHooks runs on workspace and returns clean status or coaching", () => {
-    const result = runHabitHooks({ scope: "working" });
+test("runHabitHooks runs on workspace and returns clean status or coaching", async () => {
+    const result = await runHabitHooks({ scope: "working" });
     assert.equal(typeof result.exitCode, "number");
     assert.equal(typeof result.passed, "boolean");
     assert.ok(result.output.length > 0);
+});
+test("runHabitHooks stops a run that exceeds even a very small timeout", async () => {
+    // a whole-repo scan cannot finish in 1ms; a floor on the timeout (regression) would let it run to completion
+    const result = await runHabitHooks({ scope: "all", timeoutMs: 1 });
+    assert.equal(result.timedOut, true);
+    assert.equal(result.exitCode, 124);
+    assert.match(result.output, /timed out/);
 });
 test("runHabitSnooze supports list action", () => {
     const result = runHabitSnooze({ action: "list" });
@@ -26,7 +63,7 @@ test("registers tools and commands with host", () => {
     const registeredTools = [];
     const registeredCommands = [];
     let promptInjected = false;
-    const mockPi = {
+    registerExtension({
         registerTool: (tool) => {
             registeredTools.push(tool);
         },
@@ -41,10 +78,8 @@ test("registers tools and commands with host", () => {
         injectSystemPrompt: (_prompt) => {
             promptInjected = true;
         },
-    };
-    registerExtension(mockPi);
-    const toolNames = registeredTools.map((t) => t.name);
-    assert.deepEqual(toolNames, ["habit_hooks", "habit_snooze"]);
+    });
+    assert.deepEqual(registeredTools.map((t) => t.name), ["habit_hooks", "habit_snooze"]);
     assert.deepEqual(registeredCommands, ["habit-hooks", "snooze"]);
     assert.equal(promptInjected, false);
     // Verify both execute and handler exist on registered tools
@@ -53,114 +88,102 @@ test("registers tools and commands with host", () => {
         assert.equal(typeof t.handler, "function");
     }
 });
-test("lifecycle: tool_call event updates status badge", async () => {
-    const handlers = {};
-    const statusUpdates = [];
-    const mockPi = {
-        registerTool: () => { },
-        ui: {
-            setStatus: (key, status) => {
-                statusUpdates.push({ key, status });
-            },
-        },
-        on: (event, handler) => {
-            handlers[event] = handlers[event] || [];
-            handlers[event].push(handler);
-        },
-    };
-    registerExtension(mockPi);
-    assert.ok(handlers["tool_call"] && handlers["tool_call"].length > 0);
-    // Simulate tool_call on an existing rust file
-    const toolCallHandler = handlers["tool_call"][0];
-    await toolCallHandler({
-        tool: "edit",
-        params: { path: "crates/habit-core/src/lib.rs" },
-    });
-    assert.ok(statusUpdates.length > 0);
-    assert.equal(statusUpdates[0].key, "habit-hooks");
-    const statusVal = typeof statusUpdates[0].status === "object" ? statusUpdates[0].status?.text : statusUpdates[0].status;
-    assert.ok(statusVal?.includes("clean") || statusVal?.includes("smell"));
+test("only the main-session stop hook is a gate; per-turn and per-call events never run checks", () => {
+    const { pi, handlers } = host();
+    registerExtension(pi);
+    assert.equal(handlers["session_stop"]?.length, 1);
+    // turn_end fires after every model turn and hosts ignore its result; before_yield does not exist.
+    assert.equal(handlers["turn_end"], undefined);
+    assert.equal(handlers["before_yield"], undefined);
+    // tool_call is pre-exec: it only opens an attribution window, so a scan there would read the file before the edit lands.
+    assert.equal(handlers["tool_call"]?.length, 1);
 });
-test("lifecycle: tool_call ignores non-rust files", async () => {
-    const handlers = {};
-    const statusUpdates = [];
-    const mockPi = {
-        registerTool: () => { },
-        ui: {
-            setStatus: (key, status) => {
-                statusUpdates.push({ key, status });
-            },
-        },
-        on: (event, handler) => {
-            handlers[event] = handlers[event] || [];
-            handlers[event].push(handler);
-        },
-    };
-    registerExtension(mockPi);
-    assert.ok(handlers["tool_call"] && handlers["tool_call"].length > 0);
-    // Simulate tool_call on a markdown or typescript file
-    const toolCallHandler = handlers["tool_call"][0];
-    const res = await toolCallHandler({
-        tool: "edit",
-        params: { path: "README.md" },
+test("no automatic firing without Rust sources, in subagents, or when switched off", async () => {
+    const empty = tempProject({
+        "Cargo.toml": "[workspace]\n",
+        "README.md": "no Rust sources here\n",
+        "target/ignored.rs": "not project source\n",
     });
-    assert.equal(res, undefined);
-    assert.equal(statusUpdates.length, 0);
-});
-test("lifecycle: no automatic coaching in a project without Rust files", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "habit-hooks-non-rust-"));
+    const rust = tempProject({ "Cargo.toml": "[package]\nname = \"t\"\n", "src/main.rs": "fn main() {}\n" });
     try {
-        writeFileSync(join(cwd, "Cargo.toml"), "[workspace]\n");
-        writeFileSync(join(cwd, "README.md"), "no Rust sources here\n");
-        mkdirSync(join(cwd, "target"));
-        writeFileSync(join(cwd, "target", "ignored.rs"), "not project source\n");
-        const handlers = {};
-        const statuses = [];
-        const host = {
-            registerTool: () => { },
-            injectSystemPrompt: () => { throw new Error("unconditional prompt injection"); },
-            ui: {
-                setStatus: (_key, value) => {
-                    statuses.push(typeof value === "object" ? value?.text ?? "" : value ?? "");
-                },
+        const { pi, handlers, statuses } = host({
+            injectSystemPrompt: () => {
+                throw new Error("unconditional prompt injection");
             },
-            on: (event, handler) => {
-                handlers[event] = handlers[event] || [];
-                handlers[event].push(handler);
-            },
-        };
-        registerExtension(host);
-        assert.equal(handlers["before_agent_start"][0]({ systemPrompt: ["Base"] }, { cwd }), undefined);
-        assert.deepEqual(handlers["turn_end"][0]({ cwd }), { interrupt: false });
-        assert.deepEqual(handlers["before_yield"][0]({ cwd }), { interrupt: false });
-        assert.deepEqual(handlers["session_stop"][0]({ cwd }), { interrupt: false });
-        assert.equal(await handlers["tool_call"][0]({ tool: "edit", params: { path: "target/ignored.rs" } }, { cwd }), undefined);
-        assert.deepEqual(statuses, []);
-        mkdirSync(join(cwd, "src"));
-        writeFileSync(join(cwd, "src", "main.rs"), "fn main() {}\n");
-        const prompted = handlers["before_agent_start"][0]({ systemPrompt: ["Base"] }, { cwd });
-        assert.ok(prompted.systemPrompt.some((p) => p.includes("Habit Hooks Quality Coaching Rules")));
+        });
+        registerExtension(pi);
+        const start = handlers["before_agent_start"][0];
+        assert.equal(start({ systemPrompt: ["Base"] }, { cwd: empty }), undefined);
+        assert.deepEqual(await handlers["session_stop"][0]({}, { cwd: empty }), { interrupt: false });
+        // the handler clears its badge (undefined) so a stale warning can't linger, but never shows anything here
+        assert.deepEqual(statuses.filter((s) => s !== undefined), []);
+        const injected = start({ systemPrompt: ["Base"] }, { cwd: rust });
+        assert.ok(injected.systemPrompt.some((p) => p.includes("Habit Hooks Quality Coaching Rules")));
+        assert.equal(start({ systemPrompt: ["Base"] }, { cwd: rust, agent: { kind: "sub" } }), undefined);
+        assert.equal(start({ systemPrompt: ["Base"], reason: "revive" }, { cwd: rust }), undefined);
+        setMode("off");
+        assert.equal(start({ systemPrompt: ["Base"] }, { cwd: rust }), undefined);
     }
     finally {
-        rmSync(cwd, { recursive: true, force: true });
+        setMode(undefined);
+        rmSync(empty, { recursive: true, force: true });
+        rmSync(rust, { recursive: true, force: true });
     }
 });
-test("lifecycle: turn_end pre-yield gate passes cleanly or interrupts on smell", async () => {
-    const handlers = {};
-    const mockPi = {
-        registerTool: () => { },
-        on: (event, handler) => {
-            handlers[event] = handlers[event] || [];
-            handlers[event].push(handler);
-        },
-    };
-    registerExtension(mockPi);
-    assert.ok(handlers["turn_end"] && handlers["turn_end"].length > 0);
-    const turnEndHandler = handlers["turn_end"][0];
-    const res = await turnEndHandler({});
-    assert.equal(typeof res.interrupt, "boolean");
-    if (res.interrupt) {
-        assert.ok(res.message.includes("Habit Hooks Quality Gate"));
+test("tool_result attributes Rust writes to the agent and scans only in edit mode, only for Rust edits, never in subagents", async () => {
+    const rust = tempProject({ "Cargo.toml": "[package]\nname = \"t\"\n", "src/lib.rs": "pub fn a() {}\n" });
+    try {
+        const { pi, handlers, statuses } = host();
+        registerExtension(pi);
+        const onResult = handlers["tool_result"][0];
+        const rustEdit = { toolName: "edit", input: { path: "src/lib.rs" } };
+        const stamp = (hard, soft = []) => ({ details: { habitHooks: { hard, soft } } });
+        // default `turn` mode: an edit is recorded on the tool result, and nothing fires
+        assert.deepEqual(await onResult(rustEdit, { cwd: rust, agent: { id: "agent-x" } }), stamp(["src/lib.rs"]));
+        setMode("edit");
+        assert.equal(await onResult({ toolName: "edit", input: { path: "README.md" } }, { cwd: rust }), undefined);
+        assert.equal(await onResult({ ...rustEdit, isError: true }, { cwd: rust }), undefined);
+        // a subagent's write is attributed too (to itself here: no parent), but never scanned
+        assert.deepEqual(await onResult(rustEdit, { cwd: rust, agent: { kind: "sub", id: "agent-y" } }), stamp(["src/lib.rs"]));
+        assert.deepEqual(statuses, []);
+        setMode("off");
+        assert.equal(await onResult(rustEdit, { cwd: rust, agent: { id: "agent-z" } }), undefined);
+    }
+    finally {
+        setMode(undefined);
+        rmSync(rust, { recursive: true, force: true });
+    }
+});
+test("the badge counts the files this agent wrote, and /habit-hooks status lists them by ownership", async () => {
+    const rust = tempProject({ "Cargo.toml": "[package]\nname = \"t\"\n", "src/lib.rs": "pub fn a() {}\n", "src/b.rs": "pub fn b() {}\n" });
+    try {
+        const commands = {};
+        const logs = [];
+        const { pi, handlers, statuses } = host({
+            registerCommand: (cmd) => {
+                commands[cmd.name] = cmd;
+            },
+        });
+        registerExtension(pi);
+        const ui = { log: (m) => logs.push(m), setStatus: (_key, value) => void statuses.push(value) };
+        const ctx = { cwd: rust, agent: { id: "badge-agent" }, ui };
+        handlers["session_start"][0]({}, ctx);
+        assert.equal(statuses.at(-1), "habit-hooks: turn");
+        await handlers["tool_result"][0]({ toolName: "write", input: { path: "src/lib.rs" } }, ctx);
+        assert.equal(statuses.at(-1), "habit-hooks: turn · 1 file");
+        await handlers["tool_result"][0]({ toolName: "write", input: { path: "src/b.rs" } }, ctx);
+        assert.equal(statuses.at(-1), "habit-hooks: turn · 2 files");
+        // another agent sees none of it
+        handlers["session_start"][0]({}, { cwd: rust, agent: { id: "someone-else" }, ui: ctx.ui });
+        assert.equal(statuses.at(-1), "habit-hooks: turn");
+        await commands["habit-hooks"].handler("status", ctx);
+        assert.match(logs[0], /this agent wrote \(checked and enforced\): src\/lib\.rs, src\/b\.rs/);
+        assert.match(logs[0], /never enforced\): none/);
+        assert.match(logs[0], /Last gate: none yet/);
+    }
+    finally {
+        setMode(undefined);
+        rmSync(rust, { recursive: true, force: true });
     }
 });
 test("lifecycle: validateUnwrapWithLaya invokes Laya judge if available", async () => {
@@ -190,96 +213,91 @@ test("lifecycle: validateUnwrapWithLaya invokes Laya judge if available", async 
 test("compatibility: works with Pi host environment", async () => {
     const tools = {};
     const commands = {};
-    const handlers = {};
-    const piHost = {
+    const { pi, handlers } = host({
         registerTool: (tool) => {
             tools[tool.name] = tool;
         },
         registerCommand: (name, desc, handler) => {
             commands[name] = { desc, handler };
         },
-        on: (event, handler) => {
-            handlers[event] = handlers[event] || [];
-            handlers[event].push(handler);
-        },
-    };
-    registerExtension(piHost);
+    });
+    registerExtension(pi);
     // 1. Tool registration
     assert.ok(tools["habit_hooks"]);
     assert.ok(tools["habit_snooze"]);
     // 2. Pi execute calling convention
-    const result = await tools["habit_hooks"].execute("tool-call-1", { scope: "working" }, undefined, undefined, { cwd: process.cwd() });
+    const result = await tools["habit_hooks"].execute("tool-call-1", { scope: "working" }, undefined, undefined, {
+        cwd: process.cwd(),
+    });
     assert.equal(typeof result.exitCode, "number");
     assert.equal(typeof result.passed, "boolean");
     assert.ok(Array.isArray(result.content));
     // 3. Command registration
     assert.ok(commands["habit-hooks"]);
     assert.ok(commands["snooze"]);
-    // 4. Prompt injection via before_agent_start
-    assert.ok(handlers["before_agent_start"]);
+    // 4. Prompt injection via before_agent_start (this repo is a Rust project)
     const promptEvt = handlers["before_agent_start"][0]({ systemPrompt: ["Base prompt"] });
     assert.ok(Array.isArray(promptEvt.systemPrompt) &&
         promptEvt.systemPrompt.some((p) => p.includes("Habit Hooks Quality Coaching Rules")));
-    // 5. Lifecycle event hooks
-    assert.ok(handlers["tool_call"]);
-    assert.ok(handlers["turn_end"]);
 });
 test("compatibility: works with Oh My Pi (OMP) host environment", async () => {
     const tools = {};
     const commands = {};
-    const handlers = {};
-    let injectedPrompt = "";
-    const statusUpdates = [];
-    const ompHost = {
+    const logs = [];
+    const { pi, handlers } = host({
         registerTool: (tool) => {
             tools[tool.name] = tool;
         },
         registerCommand: (cmdObj) => {
             commands[cmdObj.name] = cmdObj;
         },
-        injectSystemPrompt: (prompt) => {
-            injectedPrompt = prompt;
-        },
-        ui: {
-            setStatus: (key, status) => {
-                statusUpdates.push({ key, status });
-            },
-        },
-        on: (event, handler) => {
-            handlers[event] = handlers[event] || [];
-            handlers[event].push(handler);
-        },
-    };
-    registerExtension(ompHost);
-    // 1. Tool registration
+    });
+    registerExtension(pi);
+    // 1. Tool registration + OMP handler calling convention
     assert.ok(tools["habit_hooks"]);
     assert.ok(tools["habit_snooze"]);
-    // 2. OMP handler calling convention
     const result = await tools["habit_hooks"].handler({ scope: "working" }, { cwd: process.cwd() });
     assert.equal(typeof result.exitCode, "number");
     assert.equal(typeof result.passed, "boolean");
     assert.ok(Array.isArray(result.content));
-    // 3. Direct command object registration
+    // 2. Direct command object registration, including the fire-mode controls
     assert.ok(commands["habit-hooks"]);
     assert.ok(commands["snooze"]);
-    // Direct injection is global; OMP receives project-scoped guidelines via before_agent_start.
-    assert.equal(injectedPrompt, "");
-    assert.ok(handlers["before_agent_start"][0]({ systemPrompt: "Base" }, { cwd: process.cwd() }).systemPrompt.includes("Habit Hooks Quality Coaching Rules"));
-    // 5. OMP before_yield and session_stop event hooks
-    assert.ok(handlers["before_yield"]);
-    assert.ok(handlers["session_stop"]);
-    const stopResult = await handlers["session_stop"][0]({});
-    assert.equal(typeof stopResult.interrupt, "boolean");
-    if (stopResult.interrupt) {
-        assert.equal(stopResult.decision, "block");
-        assert.ok(stopResult.reason.includes("Habit Hooks Quality Gate"));
+    try {
+        await commands["habit-hooks"].handler("off", { ui: { log: (m) => logs.push(m) } });
+        await commands["habit-hooks"].handler("status", { ui: { log: (m) => logs.push(m) } });
+        assert.match(logs[0], /never automatically/);
+        assert.match(logs[1], /never automatically/);
+        assert.match(logs[1], /HABIT_HOOKS_TIMEOUT_MS/);
     }
-    // 6. OMP tool_call hook with args parameter shape
-    assert.ok(handlers["tool_call"]);
-    const toolCallRes = await handlers["tool_call"][0]({
-        toolName: "edit",
-        input: { path: "crates/habit-core/src/lib.rs" },
-    });
-    assert.ok(statusUpdates.length > 0);
-    assert.equal(statusUpdates[0].key, "habit-hooks");
+    finally {
+        rmSync(modeFile(), { force: true });
+        setMode(undefined);
+    }
+    // 3. session_stop outside a Rust project lets the session finish
+    assert.deepEqual(await handlers["session_stop"][0]({}, { cwd: tmpdir() }), { interrupt: false });
+});
+test("status line is labelled with the mode, shown only in Rust projects, and says off when off", async () => {
+    const rust = tempProject({ "Cargo.toml": "[package]\nname = \"t\"\n", "src/main.rs": "fn main() {}\n" });
+    const plain = tempProject({ "README.md": "no Rust\n" });
+    try {
+        const { pi, handlers, statuses } = host();
+        registerExtension(pi);
+        const start = handlers["session_start"][0];
+        start({}, { cwd: plain });
+        assert.equal(statuses.at(-1), undefined);
+        start({}, { cwd: rust });
+        assert.equal(statuses.at(-1), "habit-hooks: turn");
+        setMode("edit");
+        start({}, { cwd: rust });
+        assert.equal(statuses.at(-1), "habit-hooks: edit");
+        setMode("off");
+        start({}, { cwd: rust });
+        assert.equal(statuses.at(-1), "habit-hooks: off");
+    }
+    finally {
+        setMode(undefined);
+        rmSync(rust, { recursive: true, force: true });
+        rmSync(plain, { recursive: true, force: true });
+    }
 });

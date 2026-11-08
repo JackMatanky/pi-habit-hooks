@@ -69,31 +69,7 @@ fn main() {
     let plugins = load_enabled_plugins(&project_dir, &project_config);
 
     let files = if cli.staged {
-        let output = Command::new("git")
-            .current_dir(&project_dir)
-            .args(["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR", "--", "*.rs"])
-            .output()
-            .unwrap_or_else(|err| {
-                eprintln!("habit-hooks: failed to list staged Rust files: {err}");
-                process::exit(1);
-            });
-        if !output.status.success() {
-            eprintln!(
-                "habit-hooks: failed to list staged Rust files: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            process::exit(1);
-        }
-        let files: Vec<String> = output
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|name| !name.is_empty())
-            .map(|name| String::from_utf8_lossy(name).into_owned())
-            .collect();
-        if files.is_empty() {
-            return;
-        }
-        files
+        staged_rust_files(&project_dir)
     } else {
         cli.files
     };
@@ -141,6 +117,53 @@ fn main() {
 
     print!("{}", result.output);
     process::exit(result.exit_code);
+}
+
+/// Staged `.rs` files for a pre-commit run. Exits 0 right away when there is nothing to check
+/// (switched off, or no Rust staged), so hooks stay silent and fast.
+fn staged_rust_files(project_dir: &std::path::Path) -> Vec<String> {
+    if is_switched_off() {
+        process::exit(0);
+    }
+    let output = Command::new("git")
+        .current_dir(project_dir)
+        .args(["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR", "--", "*.rs"])
+        .output()
+        .unwrap_or_else(|err| {
+            eprintln!("habit-hooks: failed to list staged Rust files: {err}");
+            process::exit(1);
+        });
+    if !output.status.success() {
+        eprintln!(
+            "habit-hooks: failed to list staged Rust files: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        process::exit(1);
+    }
+    let files: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .collect();
+    if files.is_empty() {
+        process::exit(0);
+    }
+    files
+}
+
+/// True when automatic firing is turned off (`/habit-hooks off`), so git hooks stay silent too.
+/// Same precedence as the extension: HABIT_HOOKS_MODE, then the persisted mode file.
+fn is_switched_off() -> bool {
+    let mode = std::env::var("HABIT_HOOKS_MODE").ok().or_else(|| {
+        let path = std::env::var_os("HABIT_HOOKS_MODE_FILE")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config/habit-hooks/mode"))
+            })?;
+        fs::read_to_string(path).ok()
+    });
+    mode.is_some_and(|m| m.trim() == "off")
 }
 
 fn run_init(project_dir: &std::path::Path) {

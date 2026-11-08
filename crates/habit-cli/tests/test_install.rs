@@ -455,3 +455,49 @@ fn rejects_install_when_foreign_hook_exists() {
     assert_eq!(fs::read_to_string(&hook).unwrap(), "#!/bin/sh\necho custom\n");
     assert!(!path.join("hk.pkl").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn skips_staged_run_when_mode_file_says_off() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempdir().unwrap();
+    let path = dir.path();
+    git(path, &["init", "-b", "main"]);
+
+    // mock plugin whose sensor always reports an enforced smell, so an active run exits 1
+    let plugin_dir = path.join(".habit-hooks/mock");
+    fs::create_dir_all(&plugin_dir).unwrap();
+    let sensor = plugin_dir.join("sensor.sh");
+    fs::write(
+        &sensor,
+        "#!/bin/sh\necho '[{\"smell\":\"lock-across-await\",\"language\":\"rust\",\"details\":{},\"issues\":[{\"key\":\"lib.rs\",\"details\":{\"file\":\"lib.rs\",\"line\":1,\"message\":\"held\"}}]}]'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&sensor, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        plugin_dir.join("config.toml"),
+        "files = [\"**/*.rs\"]\n[[sensors]]\nname = \"mock-sensor\"\ntool = \"${dir}/sensor.sh\"\nargs = []\nsuccess_exit_codes = [0]\n",
+    )
+    .unwrap();
+    fs::write(path.join(".habit-hooks/config.toml"), "plugins = [\"mock\"]\n").unwrap();
+    fs::write(path.join("lib.rs"), "async fn foo() {}\n").unwrap();
+    git(path, &["add", "lib.rs"]);
+    let mode_file = path.join("mode");
+
+    let run = |mode: &str| {
+        fs::write(&mode_file, format!("{mode}\n")).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_habit-hooks"))
+            .arg("--staged")
+            .current_dir(path)
+            .env("HABIT_HOOKS_MODE_FILE", &mode_file)
+            .env_remove("HABIT_HOOKS_MODE")
+            .output()
+            .unwrap()
+    };
+
+    // same staged input both times, so the skip can only come from the mode
+    assert_eq!(run("turn").status.code(), Some(1));
+    let off = run("off");
+    assert_eq!(off.status.code(), Some(0));
+    assert!(off.stdout.is_empty());
+}

@@ -4,5 +4,7 @@ node_modules/
 **/node_modules/
 .habit-hooks/target/
 **/.habit-hooks/target/
+.habit-hooks/agents/
+**/.habit-hooks/agents/
 .pi/
 .DS_Store

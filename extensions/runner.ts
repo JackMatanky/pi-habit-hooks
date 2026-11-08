@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,142 +6,301 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function findPackageRoot(startDir: string): string {
-  let current = startDir;
-  while (current !== dirname(current)) {
-    if (existsSync(join(current, "package.json")) || existsSync(join(current, "Cargo.toml"))) {
-      return current;
+    let current = startDir;
+    while (current !== dirname(current)) {
+        if (
+            existsSync(join(current, "package.json")) ||
+            existsSync(join(current, "Cargo.toml"))
+        ) {
+            return current;
+        }
+        current = dirname(current);
     }
-    current = dirname(current);
-  }
-  return startDir;
+    return startDir;
 }
 
 const PACKAGE_ROOT = findPackageRoot(__dirname);
 
 export function resolveBinary(
-  name: "habit-hooks" | "habit-snooze" | "habit-sensors" | "habit-mapper" | "habit-judge"
+    name:
+        | "habit-hooks"
+        | "habit-snooze"
+        | "habit-sensors"
+        | "habit-mapper"
+        | "habit-judge",
 ): string {
-  const exeName = process.platform === "win32" ? `${name}.exe` : name;
-  const candidates = [
-    join(PACKAGE_ROOT, "target", "release", exeName),
-    join(PACKAGE_ROOT, "target", "debug", exeName),
-    join(PACKAGE_ROOT, "bin", exeName),
-  ];
+    const exeName = process.platform === "win32" ? `${name}.exe` : name;
+    const candidates = [
+        join(PACKAGE_ROOT, "target", "release", exeName),
+        join(PACKAGE_ROOT, "target", "debug", exeName),
+        join(PACKAGE_ROOT, "bin", exeName),
+    ];
 
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
+    for (const candidate of candidates) {
+        if (existsSync(candidate)) {
+            return candidate;
+        }
     }
-  }
 
-  // Fallback to name in PATH
-  return name;
+    // Fallback to name in PATH
+    return name;
 }
 
 export interface RunHabitHooksOptions {
-  scope?: "working" | "staged" | "all" | "since";
-  sinceRef?: string;
-  files?: string[];
-  fix?: boolean;
-  cwd?: string;
+    scope?: "working" | "staged" | "all" | "since";
+    sinceRef?: string;
+    files?: string[];
+    fix?: boolean;
+    cwd?: string;
+    /**
+     * Wall-clock limit for the whole run; defaults to HABIT_HOOKS_TIMEOUT_MS or
+     * 90s.
+     */
+    timeoutMs?: number;
+    signal?: AbortSignal;
 }
 
 export interface HabitHooksResult {
-  exitCode: number;
-  output: string;
-  passed: boolean;
+    exitCode: number;
+    output: string;
+    passed: boolean;
+    timedOut?: boolean;
+    aborted?: boolean;
 }
 
-export function runHabitHooks(options: RunHabitHooksOptions = {}): HabitHooksResult {
-  const cwd = options.cwd ?? process.cwd();
+// Same values as timeout(1) / SIGINT / "command not found" so they never
+// collide with habit-hooks' own 0/1/2.
+export const EXIT_TIMED_OUT = 124;
+export const EXIT_ABORTED = 130;
+export const EXIT_SPAWN_FAILED = 127;
 
-  // If auto-fix requested, run cargo clippy --fix first
-  if (options.fix) {
-    spawnSync("cargo", ["clippy", "--fix", "--allow-dirty", "--allow-no-vcs"], {
-      cwd,
-      stdio: "ignore",
-    });
-  }
+export function defaultTimeoutMs(): number {
+    const ms = Number(process.env.HABIT_HOOKS_TIMEOUT_MS);
+    return Number.isFinite(ms) && ms > 0 ? ms : 90_000;
+}
 
-  const binary = resolveBinary("habit-hooks");
-  const args: string[] = [];
+export interface ProcessResult {
+    code: number | null;
+    stdout: string;
+    stderr: string;
+    timedOut: boolean;
+    aborted: boolean;
+    error?: Error;
+}
 
-  switch (options.scope) {
-    case "all":
-      args.push("--all");
-      break;
-    case "since":
-      if (options.sinceRef) {
-        args.push("--since", options.sinceRef);
-      }
-      break;
-    case "working":
-    case "staged":
-    default:
-      args.push("--changed");
-      break;
-  }
+const liveKills = new Set<() => void>();
+process.once("exit", () => {
+    for (const kill of liveKills) kill();
+});
 
-  if (options.files && options.files.length > 0) {
-    for (const f of options.files) {
-      args.push("--file", f);
+// Children lead their own process group so one kill also reaps
+// cargo/rustc/sensor grandchildren.
+function killTree(child: ChildProcess): void {
+    try {
+        if (process.platform !== "win32" && child.pid)
+            process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+    } catch {
+        // already exited
     }
-  }
+}
 
-  const proc = spawnSync(binary, args, {
-    cwd,
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      HABIT_HOOKS_PLUGINS_DIR: join(PACKAGE_ROOT, "plugins"),
+/**
+ * Async replacement for spawnSync: never blocks the host event loop, always
+ * bounded by timeout/abort.
+ */
+export function runProcess(
+    command: string,
+    args: string[],
+    opts: {
+        cwd: string;
+        env?: NodeJS.ProcessEnv;
+        input?: string;
+        timeoutMs?: number;
+        signal?: AbortSignal;
+        maxBytes?: number;
     },
-  });
+): Promise<ProcessResult> {
+    const { promise, resolve } = Promise.withResolvers<ProcessResult>();
+    const child = spawn(command, args, {
+        cwd: opts.cwd,
+        env: opts.env,
+        detached: process.platform !== "win32",
+        stdio: ["pipe", "pipe", "pipe"],
+    });
+    const cap = opts.maxBytes ?? 4 * 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let aborted = false;
+    let done = false;
 
-  const output = (proc.stdout || "") + (proc.stderr || "");
-  const exitCode = proc.status ?? (proc.error ? 1 : 0);
+    const kill = () => killTree(child);
+    liveKills.add(kill);
+    const onAbort = () => {
+        aborted = true;
+        kill();
+    };
+    const timer = opts.timeoutMs
+        ? setTimeout(() => {
+              timedOut = true;
+              kill();
+          }, opts.timeoutMs)
+        : undefined;
+    const finish = (code: number | null, error?: Error) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        opts.signal?.removeEventListener("abort", onAbort);
+        liveKills.delete(kill);
+        resolve({ code, stdout, stderr, timedOut, aborted, error });
+    };
 
-  return {
-    exitCode,
-    output,
-    passed: exitCode === 0,
-  };
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d: string) => {
+        if (stdout.length < cap) stdout += d;
+    });
+    child.stderr.on("data", (d: string) => {
+        if (stderr.length < cap) stderr += d;
+    });
+    child.stdin.on("error", () => {});
+    child.on("error", (err) => finish(null, err));
+    child.on("close", (code) => finish(code));
+
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    if (opts.signal?.aborted) onAbort();
+    child.stdin.end(opts.input);
+    return promise;
+}
+
+function toResult(proc: ProcessResult, timeoutMs: number): HabitHooksResult {
+    if (proc.timedOut) {
+        return {
+            exitCode: EXIT_TIMED_OUT,
+            passed: false,
+            timedOut: true,
+            output: `⏱ habit-hooks timed out after ${Math.round(timeoutMs / 1000)}s and was stopped (a first run compiles clippy dependencies). Re-run it explicitly, or raise HABIT_HOOKS_TIMEOUT_MS.\n`,
+        };
+    }
+    if (proc.aborted) {
+        return {
+            exitCode: EXIT_ABORTED,
+            passed: false,
+            aborted: true,
+            output: "habit-hooks was aborted.\n",
+        };
+    }
+    if (proc.error) {
+        return {
+            exitCode: EXIT_SPAWN_FAILED,
+            passed: false,
+            output: `habit-hooks failed to start: ${proc.error.message}\n`,
+        };
+    }
+    const exitCode = proc.code ?? 137;
+    return {
+        exitCode,
+        output: proc.stdout + proc.stderr,
+        passed: exitCode === 0,
+    };
+}
+
+export async function runHabitHooks(
+    options: RunHabitHooksOptions = {},
+): Promise<HabitHooksResult> {
+    const cwd = options.cwd ?? process.cwd();
+    const timeoutMs = options.timeoutMs ?? defaultTimeoutMs();
+    const deadline = Date.now() + timeoutMs;
+    const env = {
+        ...process.env,
+        HABIT_HOOKS_PLUGINS_DIR: join(PACKAGE_ROOT, "plugins"),
+    };
+
+    // If auto-fix requested, run cargo clippy --fix first
+    if (options.fix) {
+        await runProcess(
+            "cargo",
+            ["clippy", "--fix", "--allow-dirty", "--allow-no-vcs"],
+            {
+                cwd,
+                timeoutMs,
+                signal: options.signal,
+            },
+        );
+    }
+
+    const args: string[] = [];
+    switch (options.scope) {
+        case "all":
+            args.push("--all");
+            break;
+        case "since":
+            if (options.sinceRef) {
+                args.push("--since", options.sinceRef);
+            }
+            break;
+        case "working":
+        case "staged":
+        default:
+            args.push("--changed");
+            break;
+    }
+
+    if (options.files && options.files.length > 0) {
+        for (const f of options.files) {
+            args.push("--file", f);
+        }
+    }
+
+    const proc = await runProcess(resolveBinary("habit-hooks"), args, {
+        cwd,
+        env,
+        timeoutMs: Math.max(1, deadline - Date.now()), // 0 would mean "no timeout"
+        signal: options.signal,
+    });
+    return toResult(proc, timeoutMs);
 }
 
 export interface RunHabitSnoozeOptions {
-  action: "list" | "add" | "prune";
-  reason?: string;
-  cwd?: string;
-  inputJson?: string;
+    action: "list" | "add" | "prune";
+    reason?: string;
+    cwd?: string;
+    inputJson?: string;
 }
 
-export function runHabitSnooze(options: RunHabitSnoozeOptions): { exitCode: number; output: string } {
-  const cwd = options.cwd ?? process.cwd();
-  const binary = resolveBinary("habit-snooze");
-  const args: string[] = [];
+export function runHabitSnooze(options: RunHabitSnoozeOptions): {
+    exitCode: number;
+    output: string;
+} {
+    const cwd = options.cwd ?? process.cwd();
+    const binary = resolveBinary("habit-snooze");
+    const args: string[] = [];
 
-  if (options.action === "list") {
-    args.push("--list");
-  } else if (options.action === "add") {
-    args.push("--snooze");
-    if (options.reason) {
-      args.push("--reason", options.reason);
+    if (options.action === "list") {
+        args.push("--list");
+    } else if (options.action === "add") {
+        args.push("--snooze");
+        if (options.reason) {
+            args.push("--reason", options.reason);
+        }
+    } else if (options.action === "prune") {
+        args.push("--prune");
     }
-  } else if (options.action === "prune") {
-    args.push("--prune");
-  }
 
-  const proc = spawnSync(binary, args, {
-    cwd,
-    input: options.inputJson ?? "[]",
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      HABIT_HOOKS_PLUGINS_DIR: join(PACKAGE_ROOT, "plugins"),
-    },
-  });
+    const proc = spawnSync(binary, args, {
+        cwd,
+        input: options.inputJson ?? "[]",
+        encoding: "utf-8",
+        timeout: 15_000,
+        env: {
+            ...process.env,
+            HABIT_HOOKS_PLUGINS_DIR: join(PACKAGE_ROOT, "plugins"),
+        },
+    });
 
-  const output = (proc.stdout || "") + (proc.stderr || "");
-  const exitCode = proc.status ?? 0;
+    const output = (proc.stdout || "") + (proc.stderr || "");
+    const exitCode = proc.status ?? 0;
 
-  return { exitCode, output };
+    return { exitCode, output };
 }

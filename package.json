@@ -63,7 +63,7 @@
   },
   "scripts": {
     "build": "cargo build --release && tsc",
-    "test": "cargo test && tsc && node --test dist/tests/extension.test.js",
+    "test": "cargo test && tsc && node --test dist/tests/*.test.js",
     "typecheck": "tsc --noEmit"
   }
 }

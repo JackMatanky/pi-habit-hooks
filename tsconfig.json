@@ -3,8 +3,12 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
-    "types": ["node"],
+    "lib": [
+      "ES2024"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -12,5 +16,8 @@
     "declaration": true,
     "outDir": "./dist"
   },
-  "include": ["extensions/**/*", "tests/**/*"]
+  "include": [
+    "extensions/**/*",
+    "tests/**/*"
+  ]
 }
