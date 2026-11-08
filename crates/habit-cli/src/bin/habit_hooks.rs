@@ -1,13 +1,21 @@
+use std::{
+    fs,
+    process::{self, Command, Stdio},
+};
+
 use clap::{Parser, Subcommand};
 use habit_cli::{find_project_dir, load_enabled_plugins, load_project_config};
 use habit_mapper::evaluate_and_render;
-use habit_sensors::{detector::DetectorResolver, runner::SensorRunner, scope::ScopeArgs};
+use habit_sensors::{
+    detector::DetectorResolver, runner::SensorRunner, scope::ScopeArgs,
+};
 use habit_snooze::{filter_snoozed_findings, load_snooze_file};
-use std::fs;
-use std::process::{self, Command, Stdio};
 
 #[derive(Parser, Debug)]
-#[command(name = "habit-hooks", about = "Habit Hooks Code Quality Coaching Engine")]
+#[command(
+    name = "habit-hooks",
+    about = "Habit Hooks Code Quality Coaching Engine"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -38,7 +46,11 @@ struct Cli {
     #[arg(long = "no-judge", help = "Disable System-1 judge triage stage")]
     no_judge: bool,
 
-    #[arg(long, value_name = "PATH", help = "Also write a machine-readable JSON summary (enforced files, incomplete run) to PATH")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Also write a machine-readable JSON summary (enforced files, incomplete run) to PATH"
+    )]
     report: Option<std::path::PathBuf>,
 }
 
@@ -46,9 +58,14 @@ struct Cli {
 enum Commands {
     #[command(about = "Initialize Habit Hooks configuration and verify tools")]
     Init,
-    #[command(about = "Install Git pre-commit hook into .git/hooks/pre-commit and/or configure with hk")]
+    #[command(
+        about = "Install Git pre-commit hook into .git/hooks/pre-commit and/or configure with hk"
+    )]
     Install {
-        #[arg(long, help = "Configure pre-commit hook using hk (https://hk.jdx.dev)")]
+        #[arg(
+            long,
+            help = "Configure pre-commit hook using hk (https://hk.jdx.dev)"
+        )]
         hk: bool,
     },
 }
@@ -60,7 +77,10 @@ fn main() {
         run_init(&project_dir);
         return;
     }
-    if let Some(Commands::Install { hk }) = cli.command {
+    if let Some(Commands::Install {
+        hk,
+    }) = cli.command
+    {
         if let Err(err) = run_install(&project_dir, hk) {
             eprintln!("habit-hooks: {err}");
             process::exit(1);
@@ -87,7 +107,8 @@ fn main() {
         no_snooze: cli.no_snooze,
     };
 
-    let runner = SensorRunner::new(&project_dir, &project_config, &plugins, &scope_args);
+    let runner =
+        SensorRunner::new(&project_dir, &project_config, &plugins, &scope_args);
     let findings = runner.run_all();
 
     let triaged_findings = if cli.no_judge {
@@ -100,17 +121,21 @@ fn main() {
         triaged_findings
     } else {
         match load_snooze_file(&project_dir) {
-            Ok(snooze) => filter_snoozed_findings(triaged_findings, &snooze, &project_dir),
+            Ok(snooze) => {
+                filter_snoozed_findings(triaged_findings, &snooze, &project_dir)
+            }
             Err(_) => triaged_findings,
         }
     };
 
-    let findings_json = serde_json::to_string(&final_findings).unwrap_or_else(|err| {
-        eprintln!("habit-hooks: failed serializing findings: {err}");
-        process::exit(1);
-    });
+    let findings_json =
+        serde_json::to_string(&final_findings).unwrap_or_else(|err| {
+            eprintln!("habit-hooks: failed serializing findings: {err}");
+            process::exit(1);
+        });
 
-    let plugin_dirs: Vec<_> = plugins.iter().map(|p| p.plugin_dir.clone()).collect();
+    let plugin_dirs: Vec<_> =
+        plugins.iter().map(|p| p.plugin_dir.clone()).collect();
     let result = evaluate_and_render(
         &findings_json,
         &project_dir,
@@ -119,14 +144,20 @@ fn main() {
     );
 
     if let Some(path) = &cli.report {
-        // structured twin of the text below, so callers need not parse it; a failed write is not a failed check
+        // structured twin of the text below, so callers need not parse it; a
+        // failed write is not a failed check
         match serde_json::to_string(&result.report) {
             Ok(json) => {
                 if let Err(err) = fs::write(path, json) {
-                    eprintln!("habit-hooks: could not write report to {}: {err}", path.display());
+                    eprintln!(
+                        "habit-hooks: could not write report to {}: {err}",
+                        path.display()
+                    );
                 }
             }
-            Err(err) => eprintln!("habit-hooks: failed serializing report: {err}"),
+            Err(err) => {
+                eprintln!("habit-hooks: failed serializing report: {err}")
+            }
         }
     }
 
@@ -134,15 +165,24 @@ fn main() {
     process::exit(result.exit_code);
 }
 
-/// Staged `.rs` files for a pre-commit run. Exits 0 right away when there is nothing to check
-/// (switched off, or no Rust staged), so hooks stay silent and fast.
+/// Staged `.rs` files for a pre-commit run. Exits 0 right away when there is
+/// nothing to check (switched off, or no Rust staged), so hooks stay silent and
+/// fast.
 fn staged_rust_files(project_dir: &std::path::Path) -> Vec<String> {
     if is_switched_off() {
         process::exit(0);
     }
     let output = Command::new("git")
         .current_dir(project_dir)
-        .args(["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR", "--", "*.rs"])
+        .args([
+            "diff",
+            "--cached",
+            "--name-only",
+            "-z",
+            "--diff-filter=ACMR",
+            "--",
+            "*.rs",
+        ])
         .output()
         .unwrap_or_else(|err| {
             eprintln!("habit-hooks: failed to list staged Rust files: {err}");
@@ -167,14 +207,17 @@ fn staged_rust_files(project_dir: &std::path::Path) -> Vec<String> {
     files
 }
 
-/// True when automatic firing is turned off (`/habit-hooks off`), so git hooks stay silent too.
-/// Same precedence as the extension: HABIT_HOOKS_MODE, then the persisted mode file.
+/// True when automatic firing is turned off (`/habit-hooks off`), so git hooks
+/// stay silent too. Same precedence as the extension: HABIT_HOOKS_MODE, then
+/// the persisted mode file.
 fn is_switched_off() -> bool {
     let mode = std::env::var("HABIT_HOOKS_MODE").ok().or_else(|| {
         let path = std::env::var_os("HABIT_HOOKS_MODE_FILE")
             .map(std::path::PathBuf::from)
             .or_else(|| {
-                std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config/habit-hooks/mode"))
+                std::env::var_os("HOME").map(|h| {
+                    std::path::Path::new(&h).join(".config/habit-hooks/mode")
+                })
             })?;
         fs::read_to_string(path).ok()
     });
@@ -233,17 +276,26 @@ mainBranch = "main"
     let mut missing_detectors = Vec::new();
 
     for plugin in &plugins {
-        let resolver = DetectorResolver::new(project_dir, &plugin.plugin_dir, &plugin.detectors);
+        let resolver = DetectorResolver::new(
+            project_dir,
+            &plugin.plugin_dir,
+            &plugin.detectors,
+        );
         for detector in &plugin.detectors {
             match resolver.resolve_tool(&detector.name) {
                 Ok(path) => {
-                    println!("  [OK] {:<16} ({})", detector.name, path.display());
+                    println!(
+                        "  [OK] {:<16} ({})",
+                        detector.name,
+                        path.display()
+                    );
                 }
                 Err(_) => {
                     println!("  [MISSING] {:<16}", detector.name);
                     if let Some(ref install) = detector.install {
                         println!("            Install: {install}");
-                        missing_detectors.push((detector.name.clone(), install.clone()));
+                        missing_detectors
+                            .push((detector.name.clone(), install.clone()));
                     }
                 }
             }
@@ -320,7 +372,8 @@ steps {{
         println!("✅ Created hk.pkl with 'habit-hooks' step");
     }
 
-    // If hk is available on PATH, run `hk install` to register hook via git config
+    // If hk is available on PATH, run `hk install` to register hook via git
+    // config
     let hk_check = Command::new("hk")
         .arg("--version")
         .stdout(Stdio::null())
@@ -348,7 +401,10 @@ steps {{
     Ok(false)
 }
 
-fn run_install(project_dir: &std::path::Path, force_hk: bool) -> Result<(), String> {
+fn run_install(
+    project_dir: &std::path::Path,
+    force_hk: bool,
+) -> Result<(), String> {
     let git_dir = project_dir.join(".git");
     if !git_dir.exists() {
         return Err("Not a git repository".to_string());
@@ -356,9 +412,12 @@ fn run_install(project_dir: &std::path::Path, force_hk: bool) -> Result<(), Stri
 
     let pre_commit_path = git_dir.join("hooks/pre-commit");
     if pre_commit_path.exists() {
-        let existing = fs::read_to_string(&pre_commit_path)
-            .map_err(|e| format!("Failed to read existing pre-commit hook: {e}"))?;
-        if !existing.starts_with("#!/bin/sh\n# Habit Hooks automated pre-commit gate") {
+        let existing = fs::read_to_string(&pre_commit_path).map_err(|e| {
+            format!("Failed to read existing pre-commit hook: {e}")
+        })?;
+        if !existing
+            .starts_with("#!/bin/sh\n# Habit Hooks automated pre-commit gate")
+        {
             return Err(format!(
                 "Existing pre-commit hook at {} is not managed by Habit Hooks; refusing to overwrite it",
                 pre_commit_path.display()
@@ -372,8 +431,9 @@ fn run_install(project_dir: &std::path::Path, force_hk: bool) -> Result<(), Stri
     }
 
     let hooks_dir = git_dir.join("hooks");
-    fs::create_dir_all(&hooks_dir)
-        .map_err(|err| format!("Failed to create .git/hooks directory: {err}"))?;
+    fs::create_dir_all(&hooks_dir).map_err(|err| {
+        format!("Failed to create .git/hooks directory: {err}")
+    })?;
 
     let script = r#"#!/bin/sh
 # Habit Hooks automated pre-commit gate
@@ -394,13 +454,18 @@ fi
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&pre_commit_path)
-            .map_err(|err| format!("Failed to read pre-commit hook permissions: {err}"))?
+            .map_err(|err| {
+                format!("Failed to read pre-commit hook permissions: {err}")
+            })?
             .permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&pre_commit_path, perms)
-            .map_err(|err| format!("Failed to make pre-commit hook executable: {err}"))?;
+        fs::set_permissions(&pre_commit_path, perms).map_err(|err| {
+            format!("Failed to make pre-commit hook executable: {err}")
+        })?;
     }
 
-    println!("✅ Installed Habit Hooks pre-commit hook in .git/hooks/pre-commit");
+    println!(
+        "✅ Installed Habit Hooks pre-commit hook in .git/hooks/pre-commit"
+    );
     Ok(())
 }

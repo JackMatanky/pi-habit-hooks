@@ -1,5 +1,6 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 fn default_details() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
@@ -139,33 +140,32 @@ impl<'de> Deserialize<'de> for UncoachedHandling {
 pub struct SmellCatalogue;
 
 impl SmellCatalogue {
-    pub const TOO_MANY_PARAMETERS: &'static str = "too-many-parameters";
-    pub const HIGH_COMPLEXITY: &'static str = "high-complexity";
-    pub const OVERSIZED_FUNCTION: &'static str = "oversized-function";
-    pub const OVERSIZED_FILE: &'static str = "oversized-file";
-    pub const UNUSED_VARIABLE: &'static str = "unused-variable";
-    pub const NON_CONST_BINDING: &'static str = "non-const-binding";
-    pub const UNUSED_IMPORT: &'static str = "unused-import";
-    pub const UNUSED_FILE: &'static str = "unused-file";
-    pub const UNUSED_DEPENDENCY: &'static str = "unused-dependency";
-    pub const UNUSED_EXPORT: &'static str = "unused-export";
-    pub const TEST_ONLY_DEAD_CODE: &'static str = "test-only-dead-code";
-    pub const CYCLIC_DEPENDENCY: &'static str = "cyclic-dependency";
     pub const CHANGE_RISK_HOTSPOT: &'static str = "change-risk-hotspot";
-    pub const SWALLOWED_EXCEPTION: &'static str = "swallowed-exception";
-    pub const WARNING_COMMENT: &'static str = "warning-comment";
-    pub const NON_ESSENTIAL_COMMENT: &'static str = "non-essential-comment";
-    pub const DUPLICATE_DEPENDENCY: &'static str = "duplicate-dependency";
+    pub const CYCLIC_DEPENDENCY: &'static str = "cyclic-dependency";
     pub const DUPLICATED_CODE: &'static str = "duplicated-code";
+    pub const DUPLICATE_DEPENDENCY: &'static str = "duplicate-dependency";
+    pub const HIGH_COMPLEXITY: &'static str = "high-complexity";
     pub const INCOMPLETE_RUN: &'static str = "incomplete-run";
-    pub const PARSE_ERROR: &'static str = "parse-error";
-
     // New additions from rust-skills
     pub const LOCK_ACROSS_AWAIT: &'static str = "lock-across-await";
-    pub const UNDOCUMENTED_UNSAFE: &'static str = "undocumented-unsafe";
-    pub const UNHANDLED_UNWRAP: &'static str = "unhandled-unwrap";
+    pub const NON_CONST_BINDING: &'static str = "non-const-binding";
+    pub const NON_ESSENTIAL_COMMENT: &'static str = "non-essential-comment";
+    pub const OVERSIZED_FILE: &'static str = "oversized-file";
+    pub const OVERSIZED_FUNCTION: &'static str = "oversized-function";
+    pub const PARSE_ERROR: &'static str = "parse-error";
     pub const REDUNDANT_CLONE: &'static str = "redundant-clone";
     pub const SUBOPTIMAL_BORROW_TYPE: &'static str = "suboptimal-borrow-type";
+    pub const SWALLOWED_EXCEPTION: &'static str = "swallowed-exception";
+    pub const TEST_ONLY_DEAD_CODE: &'static str = "test-only-dead-code";
+    pub const TOO_MANY_PARAMETERS: &'static str = "too-many-parameters";
+    pub const UNDOCUMENTED_UNSAFE: &'static str = "undocumented-unsafe";
+    pub const UNHANDLED_UNWRAP: &'static str = "unhandled-unwrap";
+    pub const UNUSED_DEPENDENCY: &'static str = "unused-dependency";
+    pub const UNUSED_EXPORT: &'static str = "unused-export";
+    pub const UNUSED_FILE: &'static str = "unused-file";
+    pub const UNUSED_IMPORT: &'static str = "unused-import";
+    pub const UNUSED_VARIABLE: &'static str = "unused-variable";
+    pub const WARNING_COMMENT: &'static str = "warning-comment";
 
     pub fn default_severity(smell: &str) -> Severity {
         match smell {
@@ -196,7 +196,8 @@ impl SmellCatalogue {
             | Self::REDUNDANT_CLONE
             | Self::SUBOPTIMAL_BORROW_TYPE => Severity::Suggested,
 
-            // Unknown / open-vocabulary smells default to Suggested unless configured otherwise
+            // Unknown / open-vocabulary smells default to Suggested unless
+            // configured otherwise
             _ => Severity::Suggested,
         }
     }
@@ -207,8 +208,9 @@ mod tests {
     use super::*;
 
     mod serialization {
-        use super::*;
         use pretty_assertions::assert_eq;
+
+        use super::*;
 
         #[test]
         fn deserializes_finding_with_empty_details_when_omitted() {
@@ -252,30 +254,41 @@ mod tests {
 
         #[test]
         fn rejects_invalid_severity_value() {
-            let result: Result<Severity, _> = serde_json::from_str(r#""unknown""#);
+            let result: Result<Severity, _> =
+                serde_json::from_str(r#""unknown""#);
             assert!(result.is_err());
         }
 
         #[test]
         fn verifies_default_severity_for_new_smells() {
             assert_eq!(
-                SmellCatalogue::default_severity(SmellCatalogue::LOCK_ACROSS_AWAIT),
+                SmellCatalogue::default_severity(
+                    SmellCatalogue::LOCK_ACROSS_AWAIT
+                ),
                 Severity::Enforced
             );
             assert_eq!(
-                SmellCatalogue::default_severity(SmellCatalogue::UNDOCUMENTED_UNSAFE),
+                SmellCatalogue::default_severity(
+                    SmellCatalogue::UNDOCUMENTED_UNSAFE
+                ),
                 Severity::Enforced
             );
             assert_eq!(
-                SmellCatalogue::default_severity(SmellCatalogue::UNHANDLED_UNWRAP),
+                SmellCatalogue::default_severity(
+                    SmellCatalogue::UNHANDLED_UNWRAP
+                ),
                 Severity::Suggested
             );
             assert_eq!(
-                SmellCatalogue::default_severity(SmellCatalogue::REDUNDANT_CLONE),
+                SmellCatalogue::default_severity(
+                    SmellCatalogue::REDUNDANT_CLONE
+                ),
                 Severity::Suggested
             );
             assert_eq!(
-                SmellCatalogue::default_severity(SmellCatalogue::SUBOPTIMAL_BORROW_TYPE),
+                SmellCatalogue::default_severity(
+                    SmellCatalogue::SUBOPTIMAL_BORROW_TYPE
+                ),
                 Severity::Suggested
             );
         }

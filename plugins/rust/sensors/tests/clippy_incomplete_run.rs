@@ -1,10 +1,10 @@
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
+use std::{fs, path::PathBuf, process::Command};
 
-/// A throwaway crate whose `src/lib.rs` pulls in one valid and one broken module.
+/// A throwaway crate whose `src/lib.rs` pulls in one valid and one broken
+/// module.
 fn fixture(name: &str, other_rs: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("clippy-sensor-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir()
+        .join(format!("clippy-sensor-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(
@@ -12,8 +12,10 @@ fn fixture(name: &str, other_rs: &str) -> PathBuf {
         "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
     )
     .unwrap();
-    fs::write(dir.join("src/lib.rs"), "pub mod other;\npub mod target;\n").unwrap();
-    fs::write(dir.join("src/target.rs"), "pub fn ok() -> u32 {\n    1\n}\n").unwrap();
+    fs::write(dir.join("src/lib.rs"), "pub mod other;\npub mod target;\n")
+        .unwrap();
+    fs::write(dir.join("src/target.rs"), "pub fn ok() -> u32 {\n    1\n}\n")
+        .unwrap();
     fs::write(dir.join("src/other.rs"), other_rs).unwrap();
     dir
 }

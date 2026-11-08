@@ -1,21 +1,32 @@
+use std::{
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+};
+
 use habit_core::Finding;
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TransformError {
     #[error("failed to execute jq transform: {message}")]
-    ProcessFailed { message: String },
+    ProcessFailed {
+        message: String,
+    },
 
     #[error("transform output is not valid JSON: {message}")]
-    InvalidJson { message: String },
+    InvalidJson {
+        message: String,
+    },
 
     #[error("transform output must be a single JSON array, but received: {received}")]
-    NotAnArray { received: String },
+    NotAnArray {
+        received: String,
+    },
 
     #[error("transform output failed finding schema validation: {message}")]
-    SchemaMismatch { message: String },
+    SchemaMismatch {
+        message: String,
+    },
 }
 
 pub fn evaluate_jq(
@@ -40,18 +51,18 @@ pub fn evaluate_jq(
         })?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(trimmed_input.as_bytes())
-            .map_err(|err| TransformError::ProcessFailed {
+        stdin.write_all(trimmed_input.as_bytes()).map_err(|err| {
+            TransformError::ProcessFailed {
                 message: format!("failed writing to jq stdin: {err}"),
-            })?;
+            }
+        })?;
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|err| TransformError::ProcessFailed {
+    let output = child.wait_with_output().map_err(|err| {
+        TransformError::ProcessFailed {
             message: format!("failed reading jq output: {err}"),
-        })?;
+        }
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -66,8 +77,8 @@ pub fn evaluate_jq(
         return Ok(Vec::new());
     }
 
-    let parsed_val: serde_json::Value =
-        serde_json::from_str(trimmed_stdout).map_err(|err| TransformError::InvalidJson {
+    let parsed_val: serde_json::Value = serde_json::from_str(trimmed_stdout)
+        .map_err(|err| TransformError::InvalidJson {
             message: format!("{err}: output was {trimmed_stdout}"),
         })?;
 
@@ -78,8 +89,10 @@ pub fn evaluate_jq(
     }
 
     let findings: Vec<Finding> =
-        serde_json::from_value(parsed_val).map_err(|err| TransformError::SchemaMismatch {
-            message: err.to_string(),
+        serde_json::from_value(parsed_val).map_err(|err| {
+            TransformError::SchemaMismatch {
+                message: err.to_string(),
+            }
         })?;
 
     Ok(findings)
@@ -87,14 +100,16 @@ pub fn evaluate_jq(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
+
     use tempfile::tempdir;
 
+    use super::*;
+
     mod transform_evaluation {
-        use super::*;
         use pretty_assertions::assert_eq;
+
+        use super::*;
 
         #[test]
         fn evaluates_valid_jq_filter_into_findings() {
@@ -137,7 +152,9 @@ mod tests {
             let input = r#"{"test": 1}"#;
             let err = evaluate_jq(&filter_file, input).unwrap_err();
             match err {
-                TransformError::NotAnArray { .. } => {}
+                TransformError::NotAnArray {
+                    ..
+                } => {}
                 other => panic!("expected NotAnArray error, got {:?}", other),
             }
         }
@@ -150,7 +167,8 @@ mod tests {
                 .parent()
                 .unwrap()
                 .to_path_buf();
-            let clippy_jq = workspace.join("plugins").join("rust").join("clippy.jq");
+            let clippy_jq =
+                workspace.join("plugins").join("rust").join("clippy.jq");
 
             let input = r#"[
                 {"code": "clippy::await_holding_lock", "filename": "src/async_mod.rs", "line": 20, "column": 5, "content": "state.lock()", "message": "lock held across await"},
@@ -161,13 +179,17 @@ mod tests {
             ]"#;
 
             let findings = evaluate_jq(&clippy_jq, input).unwrap();
-            let reported_smells: Vec<&str> = findings.iter().map(|f| f.smell.as_str()).collect();
+            let reported_smells: Vec<&str> =
+                findings.iter().map(|f| f.smell.as_str()).collect();
 
             assert_eq!(reported_smells.contains(&"lock-across-await"), true);
             assert_eq!(reported_smells.contains(&"undocumented-unsafe"), true);
             assert_eq!(reported_smells.contains(&"unhandled-unwrap"), true);
             assert_eq!(reported_smells.contains(&"redundant-clone"), true);
-            assert_eq!(reported_smells.contains(&"suboptimal-borrow-type"), true);
+            assert_eq!(
+                reported_smells.contains(&"suboptimal-borrow-type"),
+                true
+            );
         }
     }
 }

@@ -71,12 +71,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -330,7 +324,6 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 name = "habit-cli"
 version = "1.5.0"
 dependencies = [
- "anyhow",
  "clap",
  "habit-core",
  "habit-judge",
@@ -349,8 +342,6 @@ dependencies = [
 name = "habit-core"
 version = "1.5.0"
 dependencies = [
- "anyhow",
- "glob",
  "pathdiff",
  "pretty_assertions",
  "serde",
@@ -363,7 +354,6 @@ dependencies = [
 name = "habit-judge"
 version = "1.5.0"
 dependencies = [
- "anyhow",
  "clap",
  "habit-core",
  "pretty_assertions",
@@ -378,7 +368,6 @@ dependencies = [
 name = "habit-mapper"
 version = "1.5.0"
 dependencies = [
- "anyhow",
  "habit-core",
  "minijinja",
  "pretty_assertions",
@@ -391,17 +380,11 @@ dependencies = [
 name = "habit-rust-sensors"
 version = "1.5.0"
 dependencies = [
- "anyhow",
  "clap",
  "pathdiff",
  "pretty_assertions",
- "proc-macro2",
- "quote",
- "regex",
  "serde",
  "serde_json",
- "syn 3.0.9",
- "thiserror",
  "walkdir",
 ]
 
@@ -409,7 +392,6 @@ dependencies = [
 name = "habit-sensors"
 version = "1.5.0"
 dependencies = [
- "anyhow",
  "glob",
  "habit-core",
  "pretty_assertions",
@@ -426,7 +408,6 @@ dependencies = [
 name = "habit-snooze"
 version = "1.5.0"
 dependencies = [
- "anyhow",
  "chrono",
  "habit-core",
  "pretty_assertions",

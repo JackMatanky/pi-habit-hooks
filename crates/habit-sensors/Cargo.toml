@@ -1,21 +1,20 @@
 [package]
 name = "habit-sensors"
 version.workspace = true
-edition.workspace = true
 authors.workspace = true
+edition.workspace = true
 license.workspace = true
 
 [dependencies]
+glob.workspace = true
 habit-core = { path = "../habit-core" }
+rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-toml.workspace = true
-thiserror.workspace = true
-anyhow.workspace = true
-glob.workspace = true
-walkdir.workspace = true
 tempfile.workspace = true
-rayon.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+walkdir.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

@@ -1,18 +1,26 @@
-use habit_core::DetectorConfig;
 use std::path::{Path, PathBuf};
+
+use habit_core::DetectorConfig;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DetectorError {
     #[error("habit-sensors: tool '{name}' is not declared in any plugin's detectors")]
-    UndeclaredTool { name: String },
+    UndeclaredTool {
+        name: String,
+    },
 
     #[error(
         "habit-sensors: required tool '{name}' is not installed.\nTo install it, run: {install}"
     )]
-    MissingTool { name: String, install: String },
+    MissingTool {
+        name: String,
+        install: String,
+    },
 
     #[error("habit-sensors: required tool '{name}' is not installed and no install instruction was provided")]
-    MissingToolNoInstall { name: String },
+    MissingToolNoInstall {
+        name: String,
+    },
 }
 
 pub struct DetectorResolver<'a> {
@@ -98,19 +106,21 @@ impl<'a> DetectorResolver<'a> {
         }
 
         // Find declared detector config
-        let detector = self
-            .detectors
-            .iter()
-            .find(|d| d.name == tool)
-            .ok_or_else(|| DetectorError::UndeclaredTool {
-                name: tool.to_string(),
-            })?;
+        let detector =
+            self.detectors.iter().find(|d| d.name == tool).ok_or_else(
+                || DetectorError::UndeclaredTool {
+                    name: tool.to_string(),
+                },
+            )?;
 
         // 1. Check custom search_paths from detector config
         for sp in &detector.search_paths {
             let expanded = sp
                 .replace("${dir}", &self.plugin_dir.display().to_string())
-                .replace("${package_root}", &self.project_dir.display().to_string());
+                .replace(
+                    "${package_root}",
+                    &self.project_dir.display().to_string(),
+                );
             let base = PathBuf::from(expanded);
             let candidate = if base.is_absolute() {
                 base.join(tool)
@@ -171,27 +181,28 @@ impl<'a> DetectorResolver<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::tempdir;
 
+    use super::*;
+
     mod resolution {
-        use super::*;
         use pretty_assertions::assert_eq;
+
+        use super::*;
 
         #[test]
         fn rejects_undeclared_tool() {
             let dir = tempdir().unwrap();
             let detectors = vec![];
-            let resolver = DetectorResolver::new(dir.path(), dir.path(), &detectors);
+            let resolver =
+                DetectorResolver::new(dir.path(), dir.path(), &detectors);
 
             let err = resolver.resolve_tool("unknown-tool").unwrap_err();
-            assert_eq!(
-                err,
-                DetectorError::UndeclaredTool {
-                    name: "unknown-tool".to_string()
-                }
-            );
+            assert_eq!(err, DetectorError::UndeclaredTool {
+                name: "unknown-tool".to_string()
+            });
         }
 
         #[test]
@@ -203,16 +214,14 @@ mod tests {
                 install: Some("npm install -g nonexistent".to_string()),
                 search_paths: vec![],
             }];
-            let resolver = DetectorResolver::new(dir.path(), dir.path(), &detectors);
+            let resolver =
+                DetectorResolver::new(dir.path(), dir.path(), &detectors);
 
             let err = resolver.resolve_tool("nonexistent").unwrap_err();
-            assert_eq!(
-                err,
-                DetectorError::MissingTool {
-                    name: "nonexistent".to_string(),
-                    install: "npm install -g nonexistent".to_string()
-                }
-            );
+            assert_eq!(err, DetectorError::MissingTool {
+                name: "nonexistent".to_string(),
+                install: "npm install -g nonexistent".to_string()
+            });
         }
 
         #[test]
@@ -229,7 +238,8 @@ mod tests {
                 install: None,
                 search_paths: vec![],
             }];
-            let resolver = DetectorResolver::new(dir.path(), dir.path(), &detectors);
+            let resolver =
+                DetectorResolver::new(dir.path(), dir.path(), &detectors);
 
             let resolved = resolver.resolve_tool("my-linter").unwrap();
             assert_eq!(resolved, tool_path);

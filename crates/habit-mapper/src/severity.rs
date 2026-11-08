@@ -1,16 +1,24 @@
-use crate::guide::GuideResolver;
-use habit_core::{Finding, ProjectConfig, Severity, SmellCatalogue, UncoachedHandling};
-use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
-/// Machine-readable summary of a run, for callers that must not parse the rendered text.
+use habit_core::{
+    Finding, ProjectConfig, Severity, SmellCatalogue, UncoachedHandling,
+};
+use serde::Serialize;
+
+use crate::guide::GuideResolver;
+
+/// Machine-readable summary of a run, for callers that must not parse the
+/// rendered text.
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
     /// Files named by enforced findings, i.e. the ones that make the run fail.
     pub enforced_files: BTreeSet<String>,
-    /// An enforced `incomplete-run`: the checks could not finish, so no file is judged either way.
+    /// An enforced `incomplete-run`: the checks could not finish, so no file
+    /// is judged either way.
     pub incomplete_run: bool,
     /// Findings that survived severity filtering (suggested ones included).
     pub smell_count: usize,
@@ -84,7 +92,8 @@ pub fn evaluate_and_render(
         }
     }
 
-    let guide_resolver = GuideResolver::new(project_dir, plugin_dirs, &custom_guides);
+    let guide_resolver =
+        GuideResolver::new(project_dir, plugin_dirs, &custom_guides);
 
     let mut active_findings: Vec<(Finding, Severity)> = Vec::new();
 
@@ -107,27 +116,28 @@ pub fn evaluate_and_render(
         }
 
         // Determine severity
-        let severity = if let Some(smell_cfg) = config.smells.get(&finding.smell) {
-            if let Some(sev) = smell_cfg.severity {
-                Some(sev)
-            } else if let Some(sev) = finding
-                .details
-                .get("severity")
-                .and_then(|v| serde_json::from_value::<Severity>(v.clone()).ok())
+        let severity =
+            if let Some(smell_cfg) = config.smells.get(&finding.smell) {
+                if let Some(sev) = smell_cfg.severity {
+                    Some(sev)
+                } else if let Some(sev) =
+                    finding.details.get("severity").and_then(|v| {
+                        serde_json::from_value::<Severity>(v.clone()).ok()
+                    })
+                {
+                    Some(sev)
+                } else {
+                    resolve_smell_severity(&finding.smell, config.uncoached)
+                }
+            } else if let Some(sev) =
+                finding.details.get("severity").and_then(|v| {
+                    serde_json::from_value::<Severity>(v.clone()).ok()
+                })
             {
                 Some(sev)
             } else {
                 resolve_smell_severity(&finding.smell, config.uncoached)
-            }
-        } else if let Some(sev) = finding
-            .details
-            .get("severity")
-            .and_then(|v| serde_json::from_value::<Severity>(v.clone()).ok())
-        {
-            Some(sev)
-        } else {
-            resolve_smell_severity(&finding.smell, config.uncoached)
-        };
+            };
 
         if let Some(sev) = severity {
             active_findings.push((finding, sev));
@@ -163,13 +173,20 @@ pub fn evaluate_and_render(
                 }
             }
             Err(err) => {
-                rendered_outputs.push(format!("### {}\n(error rendering guide: {})", finding.smell, err));
+                rendered_outputs.push(format!(
+                    "### {}\n(error rendering guide: {})",
+                    finding.smell, err
+                ));
             }
         }
     }
 
     let full_output = format!("{}\n", rendered_outputs.join("\n\n"));
-    let exit_code = if has_enforced { 1 } else { 0 };
+    let exit_code = if has_enforced {
+        1
+    } else {
+        0
+    };
 
     MapperResult {
         exit_code,
@@ -178,7 +195,10 @@ pub fn evaluate_and_render(
     }
 }
 
-fn resolve_smell_severity(smell: &str, uncoached: UncoachedHandling) -> Option<Severity> {
+fn resolve_smell_severity(
+    smell: &str,
+    uncoached: UncoachedHandling,
+) -> Option<Severity> {
     match smell {
         SmellCatalogue::TOO_MANY_PARAMETERS
         | SmellCatalogue::HIGH_COMPLEXITY
@@ -220,22 +240,36 @@ mod tests {
     use super::*;
 
     mod severity_evaluation {
-        use super::*;
         use habit_core::{Issue, IssueDetails};
         use pretty_assertions::assert_eq;
 
+        use super::*;
+
         #[test]
         fn returns_exit_2_on_empty_input() {
-            let res = evaluate_and_render("", Path::new("."), &[], &ProjectConfig::default());
+            let res = evaluate_and_render(
+                "",
+                Path::new("."),
+                &[],
+                &ProjectConfig::default(),
+            );
             assert_eq!(res.exit_code, 2);
             assert_eq!(res.output.contains("nothing arrived on stdin"), true);
         }
 
         #[test]
         fn returns_exit_0_on_empty_findings_array() {
-            let res = evaluate_and_render("[]", Path::new("."), &[], &ProjectConfig::default());
+            let res = evaluate_and_render(
+                "[]",
+                Path::new("."),
+                &[],
+                &ProjectConfig::default(),
+            );
             assert_eq!(res.exit_code, 0);
-            assert_eq!(res.output.contains("✅ Habit Hooks: automated checks passed."), true);
+            assert_eq!(
+                res.output.contains("✅ Habit Hooks: automated checks passed."),
+                true
+            );
         }
 
         #[test]
@@ -259,7 +293,12 @@ mod tests {
             }])
             .unwrap();
 
-            let res = evaluate_and_render(&json, Path::new("."), &[], &ProjectConfig::default());
+            let res = evaluate_and_render(
+                &json,
+                Path::new("."),
+                &[],
+                &ProjectConfig::default(),
+            );
             assert_eq!(res.exit_code, 1);
             assert_eq!(res.output.contains("too-many-parameters"), true);
         }
@@ -285,7 +324,12 @@ mod tests {
             }])
             .unwrap();
 
-            let res = evaluate_and_render(&json, Path::new("."), &[], &ProjectConfig::default());
+            let res = evaluate_and_render(
+                &json,
+                Path::new("."),
+                &[],
+                &ProjectConfig::default(),
+            );
             assert_eq!(res.exit_code, 0);
             assert_eq!(res.output.contains("unused-variable"), true);
         }
@@ -318,17 +362,34 @@ mod tests {
             ])
             .unwrap();
 
-            let res = evaluate_and_render(&json, Path::new("."), &[], &ProjectConfig::default());
-            assert_eq!(res.report.enforced_files.iter().collect::<Vec<_>>(), vec!["src/a.rs"]);
+            let res = evaluate_and_render(
+                &json,
+                Path::new("."),
+                &[],
+                &ProjectConfig::default(),
+            );
+            assert_eq!(
+                res.report.enforced_files.iter().collect::<Vec<_>>(),
+                vec!["src/a.rs"]
+            );
             assert_eq!(res.report.smell_count, 3);
             assert_eq!(res.report.incomplete_run, false);
         }
 
         #[test]
         fn flags_incomplete_run_without_blaming_a_file() {
-            let json = serde_json::to_string(&vec![finding("incomplete-run", "Cargo.toml")]).unwrap();
+            let json = serde_json::to_string(&vec![finding(
+                "incomplete-run",
+                "Cargo.toml",
+            )])
+            .unwrap();
 
-            let res = evaluate_and_render(&json, Path::new("."), &[], &ProjectConfig::default());
+            let res = evaluate_and_render(
+                &json,
+                Path::new("."),
+                &[],
+                &ProjectConfig::default(),
+            );
             assert_eq!(res.report.incomplete_run, true);
             assert_eq!(res.report.enforced_files.is_empty(), true);
         }

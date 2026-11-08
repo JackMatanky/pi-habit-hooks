@@ -1,8 +1,8 @@
 [package]
 name = "habit-rust-sensors"
 version.workspace = true
-edition.workspace = true
 authors.workspace = true
+edition.workspace = true
 license.workspace = true
 
 [[bin]]
@@ -22,17 +22,11 @@ name = "deps_sensor"
 path = "src/deps_sensor.rs"
 
 [dependencies]
+clap.workspace = true
+pathdiff.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-clap.workspace = true
-syn.workspace = true
-quote.workspace = true
-proc-macro2.workspace = true
 walkdir.workspace = true
-regex.workspace = true
-anyhow.workspace = true
-thiserror.workspace = true
-pathdiff.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

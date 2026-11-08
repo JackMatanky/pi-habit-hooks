@@ -1,7 +1,11 @@
-use crate::model::{Severity, UncoachedHandling};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+
+use crate::model::{Severity, UncoachedHandling};
 
 fn default_main() -> String {
     "main".to_string()
@@ -118,19 +122,30 @@ pub struct SensorConfig {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
     #[error("failed to read config file '{path}': {message}")]
-    IoError { path: String, message: String },
+    IoError {
+        path: String,
+        message: String,
+    },
 
     #[error("invalid config file '{path}': {message}")]
-    ParseError { path: String, message: String },
+    ParseError {
+        path: String,
+        message: String,
+    },
 
     #[error(
         "habit-sensors: sensor '{sensor}' config specifies 'args', but sensor command template does not include '${{args}}'"
     )]
-    MissingArgsPlaceholder { sensor: String },
+    MissingArgsPlaceholder {
+        sensor: String,
+    },
 }
 
 impl ProjectConfig {
-    pub fn load_from_str(content: &str, path_for_err: &str) -> Result<Self, ConfigError> {
+    pub fn load_from_str(
+        content: &str,
+        path_for_err: &str,
+    ) -> Result<Self, ConfigError> {
         toml::from_str(content).map_err(|err| ConfigError::ParseError {
             path: path_for_err.to_string(),
             message: err.to_string(),
@@ -138,9 +153,11 @@ impl ProjectConfig {
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path).map_err(|err| ConfigError::IoError {
-            path: path.display().to_string(),
-            message: err.to_string(),
+        let content = std::fs::read_to_string(path).map_err(|err| {
+            ConfigError::IoError {
+                path: path.display().to_string(),
+                message: err.to_string(),
+            }
         })?;
         Self::load_from_str(&content, &path.display().to_string())
     }
@@ -152,7 +169,9 @@ impl ProjectConfig {
     ) -> Result<(), ConfigError> {
         if let Some(sensor_override) = self.sensors.get(sensor_name) {
             if sensor_override.args.is_some() {
-                let has_placeholder = sensor_template_args.iter().any(|arg| arg.contains("${args}"));
+                let has_placeholder = sensor_template_args
+                    .iter()
+                    .any(|arg| arg.contains("${args}"));
                 if !has_placeholder {
                     return Err(ConfigError::MissingArgsPlaceholder {
                         sensor: sensor_name.to_string(),
@@ -180,9 +199,11 @@ impl PluginConfig {
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path).map_err(|err| ConfigError::IoError {
-            path: path.display().to_string(),
-            message: err.to_string(),
+        let content = std::fs::read_to_string(path).map_err(|err| {
+            ConfigError::IoError {
+                path: path.display().to_string(),
+                message: err.to_string(),
+            }
         })?;
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
         Self::load_from_str(&content, dir, &path.display().to_string())
@@ -194,8 +215,9 @@ mod tests {
     use super::*;
 
     mod config_loading {
-        use super::*;
         use pretty_assertions::assert_eq;
+
+        use super::*;
 
         #[test]
         fn parses_full_project_config() {
@@ -223,7 +245,8 @@ mod tests {
             py = "python3"
             "#;
 
-            let config = ProjectConfig::load_from_str(toml, "config.toml").unwrap();
+            let config =
+                ProjectConfig::load_from_str(toml, "config.toml").unwrap();
             assert_eq!(config.plugins, vec!["rust", "generic"]);
             assert_eq!(config.uncoached, UncoachedHandling::Enforce);
             assert_eq!(config.scope.changed_only, true);
@@ -247,18 +270,16 @@ mod tests {
             [sensors.clippy]
             args = ["--flag"]
             "#;
-            let config = ProjectConfig::load_from_str(toml, "config.toml").unwrap();
+            let config =
+                ProjectConfig::load_from_str(toml, "config.toml").unwrap();
             let template_args = vec!["${files}".to_string()];
 
             let err = config
                 .validate_sensor_args("clippy", &template_args)
                 .unwrap_err();
-            assert_eq!(
-                err,
-                ConfigError::MissingArgsPlaceholder {
-                    sensor: "clippy".to_string()
-                }
-            );
+            assert_eq!(err, ConfigError::MissingArgsPlaceholder {
+                sensor: "clippy".to_string()
+            });
         }
 
         #[test]
@@ -267,8 +288,10 @@ mod tests {
             [sensors.clippy]
             args = ["--flag"]
             "#;
-            let config = ProjectConfig::load_from_str(toml, "config.toml").unwrap();
-            let template_args = vec!["${files}".to_string(), "${args}".to_string()];
+            let config =
+                ProjectConfig::load_from_str(toml, "config.toml").unwrap();
+            let template_args =
+                vec!["${files}".to_string(), "${args}".to_string()];
 
             let result = config.validate_sensor_args("clippy", &template_args);
             assert!(result.is_ok());

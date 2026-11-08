@@ -1,12 +1,18 @@
+use std::{
+    collections::BTreeSet,
+    env,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
+
 use clap::Parser;
 use serde::Deserialize;
-use std::collections::BTreeSet;
-use std::env;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 #[derive(Parser, Debug)]
-#[command(name = "clippy_sensor", about = "Cargo Clippy Sensor for Habit Hooks")]
+#[command(
+    name = "clippy_sensor",
+    about = "Cargo Clippy Sensor for Habit Hooks"
+)]
 struct Args {
     #[arg(long = "target-dir", default_value = ".habit-hooks/target")]
     target_dir: String,
@@ -88,7 +94,8 @@ fn resolve_root(files: &[String], cwd: &Path) -> PathBuf {
     find_cargo_root(&start).unwrap_or_else(|| cwd.to_path_buf())
 }
 
-/// Span file as the requested `--files` spell it: relative to `cwd`, forward slashes.
+/// Span file as the requested `--files` spell it: relative to `cwd`, forward
+/// slashes.
 fn clean_path(span_file: &str, root: &Path, cwd: &Path) -> String {
     let span_path = Path::new(span_file);
     let abs = if span_path.is_absolute() {
@@ -107,7 +114,9 @@ fn clean_path(span_file: &str, root: &Path, cwd: &Path) -> String {
 fn in_scope(files_set: &BTreeSet<String>, file: &str) -> bool {
     files_set.is_empty()
         || files_set.contains(file)
-        || files_set.iter().any(|f| file.ends_with(f.as_str()) || f.ends_with(file))
+        || files_set
+            .iter()
+            .any(|f| file.ends_with(f.as_str()) || f.ends_with(file))
 }
 
 struct Scope<'a> {
@@ -116,13 +125,16 @@ struct Scope<'a> {
     files: &'a BTreeSet<String>,
 }
 
-/// Normalized lint findings of one compiler message that fall inside `scope` and were not reported yet.
+/// Normalized lint findings of one compiler message that fall inside `scope`
+/// and were not reported yet.
 fn message_violations(
     diag: &DiagnosticMessage,
     scope: &Scope,
     seen: &mut BTreeSet<String>,
 ) -> Vec<serde_json::Value> {
-    let Some(code) = diag.code.as_ref().map(|c| c.code.as_str()).filter(|c| !c.is_empty()) else {
+    let Some(code) =
+        diag.code.as_ref().map(|c| c.code.as_str()).filter(|c| !c.is_empty())
+    else {
         return Vec::new();
     };
 
@@ -132,7 +144,10 @@ fn message_violations(
         if !in_scope(scope.files, &file) {
             continue;
         }
-        if !seen.insert(format!("{code}\0{file}\0{}\0{}", span.line_start, span.column_start)) {
+        if !seen.insert(format!(
+            "{code}\0{file}\0{}\0{}",
+            span.line_start, span.column_start
+        )) {
             continue;
         }
         found.push(serde_json::json!({
@@ -147,15 +162,21 @@ fn message_violations(
     found
 }
 
-/// Parses cargo's JSON stream; the flag tells whether the compiler reported an error.
-fn collect_violations(stdout: &str, scope: &Scope) -> (Vec<serde_json::Value>, bool) {
+/// Parses cargo's JSON stream; the flag tells whether the compiler reported an
+/// error.
+fn collect_violations(
+    stdout: &str,
+    scope: &Scope,
+) -> (Vec<serde_json::Value>, bool) {
     let mut violations = Vec::new();
     let mut saw_error = false;
     let mut seen = BTreeSet::new();
 
     let diagnostics = stdout
         .lines()
-        .filter_map(|line| serde_json::from_str::<CompilerArtifact>(line.trim()).ok())
+        .filter_map(|line| {
+            serde_json::from_str::<CompilerArtifact>(line.trim()).ok()
+        })
         .filter(|artifact| artifact.reason == "compiler-message")
         .filter_map(|artifact| artifact.message);
 
@@ -195,14 +216,23 @@ fn main() {
         }
     };
 
-    let scope = Scope { root: &root, cwd: &cwd, files: &files };
-    let (mut violations, saw_error) = collect_violations(&String::from_utf8_lossy(&output.stdout), &scope);
+    let scope = Scope {
+        root: &root,
+        cwd: &cwd,
+        files: &files,
+    };
+    let (mut violations, saw_error) =
+        collect_violations(&String::from_utf8_lossy(&output.stdout), &scope);
 
-    // A crate that fails to compile (typically in files outside the requested scope) yields no lints for the
-    // target files; say so instead of reporting a misleading clean run.
+    // A crate that fails to compile (typically in files outside the requested
+    // scope) yields no lints for the target files; say so instead of
+    // reporting a misleading clean run.
     if !output.status.success() && saw_error && violations.is_empty() {
         violations.push(incomplete_run_finding());
     }
 
-    println!("{}", serde_json::to_string(&violations).unwrap_or_else(|_| "[]".to_string()));
+    println!(
+        "{}",
+        serde_json::to_string(&violations).unwrap_or_else(|_| "[]".to_string())
+    );
 }

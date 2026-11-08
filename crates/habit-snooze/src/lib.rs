@@ -1,11 +1,14 @@
+use std::{
+    fmt::Write,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
 use chrono::Utc;
 use habit_core::Finding;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use std::fmt::Write;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SnoozeEntry {
@@ -28,13 +31,22 @@ pub struct SnoozeFile {
 #[derive(Debug, thiserror::Error)]
 pub enum SnoozeError {
     #[error("failed to read snooze file '{path}': {message}")]
-    ReadError { path: String, message: String },
+    ReadError {
+        path: String,
+        message: String,
+    },
 
     #[error("failed to write snooze file '{path}': {message}")]
-    WriteError { path: String, message: String },
+    WriteError {
+        path: String,
+        message: String,
+    },
 
     #[error("failed to parse snooze file '{path}': {message}")]
-    ParseError { path: String, message: String },
+    ParseError {
+        path: String,
+        message: String,
+    },
 }
 
 pub fn snooze_file_path(project_dir: &Path) -> PathBuf {
@@ -47,10 +59,11 @@ pub fn load_snooze_file(project_dir: &Path) -> Result<SnoozeFile, SnoozeError> {
         return Ok(SnoozeFile::default());
     }
 
-    let content = fs::read_to_string(&path).map_err(|err| SnoozeError::ReadError {
-        path: path.display().to_string(),
-        message: err.to_string(),
-    })?;
+    let content =
+        fs::read_to_string(&path).map_err(|err| SnoozeError::ReadError {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })?;
 
     if content.trim().is_empty() {
         return Ok(SnoozeFile::default());
@@ -62,7 +75,10 @@ pub fn load_snooze_file(project_dir: &Path) -> Result<SnoozeFile, SnoozeError> {
     })
 }
 
-pub fn save_snooze_file(project_dir: &Path, snooze: &SnoozeFile) -> Result<(), SnoozeError> {
+pub fn save_snooze_file(
+    project_dir: &Path,
+    snooze: &SnoozeFile,
+) -> Result<(), SnoozeError> {
     let path = snooze_file_path(project_dir);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| SnoozeError::WriteError {
@@ -71,9 +87,11 @@ pub fn save_snooze_file(project_dir: &Path, snooze: &SnoozeFile) -> Result<(), S
         })?;
     }
 
-    let json = serde_json::to_string_pretty(snooze).map_err(|err| SnoozeError::WriteError {
-        path: path.display().to_string(),
-        message: err.to_string(),
+    let json = serde_json::to_string_pretty(snooze).map_err(|err| {
+        SnoozeError::WriteError {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        }
     })?;
 
     fs::write(&path, json).map_err(|err| SnoozeError::WriteError {
@@ -82,7 +100,10 @@ pub fn save_snooze_file(project_dir: &Path, snooze: &SnoozeFile) -> Result<(), S
     })
 }
 
-pub fn compute_blob_sha(project_dir: &Path, relative_file: &str) -> Option<String> {
+pub fn compute_blob_sha(
+    project_dir: &Path,
+    relative_file: &str,
+) -> Option<String> {
     // 1. Try git hash-object
     if let Ok(output) = Command::new("git")
         .current_dir(project_dir)
@@ -90,7 +111,8 @@ pub fn compute_blob_sha(project_dir: &Path, relative_file: &str) -> Option<Strin
         .output()
     {
         if output.status.success() {
-            let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let sha =
+                String::from_utf8_lossy(&output.stdout).trim().to_string();
             if sha.len() == 40 {
                 return Some(sha);
             }
@@ -131,16 +153,17 @@ pub fn filter_snoozed_findings(
                 .find(|e| e.smell == *smell && e.key == issue.key);
 
             if let Some(entry) = matched_entry {
-                // If entry has a recorded blob_sha and a file, verify SHA
-                if let (Some(expected_sha), Some(ref file_path)) = (&entry.blob_sha, &entry.file) {
-                    let current_sha = compute_blob_sha(project_dir, file_path);
-                    if current_sha.as_deref() != Some(expected_sha.as_str()) {
-                        // File modified since snooze was granted -> snooze lapsed! Keep issue
-                        kept_issues.push(issue);
+                let has_drift = match (&entry.blob_sha, &entry.file) {
+                    (Some(expected_sha), Some(file_path)) => {
+                        let current_sha =
+                            compute_blob_sha(project_dir, file_path);
+                        current_sha.as_deref() != Some(expected_sha.as_str())
                     }
-                    // Else SHA matches: issue is snoozed, drop it
+                    _ => false,
+                };
+                if has_drift {
+                    kept_issues.push(issue);
                 }
-                // Else entry matched without file/sha or sha was empty: issue is snoozed, drop it
             } else {
                 kept_issues.push(issue);
             }
@@ -213,7 +236,8 @@ pub fn prune_snooze_entries(
 
         // Check if still matches any active finding
         active_findings.iter().any(|f| {
-            f.smell == entry.smell && f.issues.iter().any(|i| i.key == entry.key)
+            f.smell == entry.smell
+                && f.issues.iter().any(|i| i.key == entry.key)
         })
     });
 }
@@ -223,11 +247,13 @@ mod tests {
     use super::*;
 
     mod snooze_filtering {
-        use super::*;
+        use std::collections::BTreeMap;
+
         use habit_core::{Issue, IssueDetails};
         use pretty_assertions::assert_eq;
-        use std::collections::BTreeMap;
         use tempfile::tempdir;
+
+        use super::*;
 
         #[test]
         fn suppresses_active_snooze_with_matching_blob_sha() {
@@ -268,7 +294,8 @@ mod tests {
                 }],
             }];
 
-            let filtered = filter_snoozed_findings(findings, &snooze, dir.path());
+            let filtered =
+                filter_snoozed_findings(findings, &snooze, dir.path());
             assert_eq!(filtered.is_empty(), true);
         }
 
@@ -285,7 +312,9 @@ mod tests {
                     smell: "unused-variable".to_string(),
                     key: file_rel.to_string(),
                     file: Some(file_rel.to_string()),
-                    blob_sha: Some("0000000000000000000000000000000000000000".to_string()),
+                    blob_sha: Some(
+                        "0000000000000000000000000000000000000000".to_string(),
+                    ),
                     date: "2026-10-25".to_string(),
                     reason: None,
                 }],
@@ -309,7 +338,8 @@ mod tests {
                 }],
             }];
 
-            let filtered = filter_snoozed_findings(findings, &snooze, dir.path());
+            let filtered =
+                filter_snoozed_findings(findings, &snooze, dir.path());
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].issues.len(), 1);
         }

@@ -1,8 +1,11 @@
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
 use glob::Pattern;
 use habit_core::ScopeConfig;
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Default)]
@@ -19,7 +22,9 @@ pub struct ScopeArgs {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ScopeError {
     #[error("failed to run git command: {message}")]
-    GitError { message: String },
+    GitError {
+        message: String,
+    },
 }
 
 pub fn matches_globs(relative_path: &str, globs: &[String]) -> bool {
@@ -47,15 +52,14 @@ pub fn matches_globs(relative_path: &str, globs: &[String]) -> bool {
     is_matched
 }
 
-pub fn filter_files_by_globs(files: &[String], globs: &[String]) -> Vec<String> {
+pub fn filter_files_by_globs(
+    files: &[String],
+    globs: &[String],
+) -> Vec<String> {
     if globs.is_empty() {
         return files.to_vec();
     }
-    files
-        .iter()
-        .filter(|f| matches_globs(f, globs))
-        .cloned()
-        .collect()
+    files.iter().filter(|f| matches_globs(f, globs)).cloned().collect()
 }
 
 pub fn discover_files(
@@ -117,7 +121,10 @@ pub fn discover_files(
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            name != ".git" && name != "target" && name != "node_modules" && name != ".habit-hooks"
+            name != ".git"
+                && name != "target"
+                && name != "node_modules"
+                && name != ".habit-hooks"
         })
         .filter_map(|e| e.ok())
     {
@@ -140,7 +147,11 @@ fn query_git_files(
     let mut files = BTreeSet::new();
 
     if let Some(ref since) = args.since {
-        let diff = run_git(project_dir, &["diff", "--name-only", &format!("{since}...HEAD")])?;
+        let diff = run_git(project_dir, &[
+            "diff",
+            "--name-only",
+            &format!("{since}...HEAD"),
+        ])?;
         for line in diff.lines() {
             files.insert(line.trim().to_string());
         }
@@ -148,10 +159,11 @@ fn query_git_files(
     }
 
     if let Some(n) = args.last {
-        let diff = run_git(
-            project_dir,
-            &["diff", "--name-only", &format!("HEAD~{n}...HEAD")],
-        )?;
+        let diff = run_git(project_dir, &[
+            "diff",
+            "--name-only",
+            &format!("HEAD~{n}...HEAD"),
+        ])?;
         for line in diff.lines() {
             files.insert(line.trim().to_string());
         }
@@ -160,7 +172,11 @@ fn query_git_files(
 
     if let Some(ref branch_opt) = args.branch {
         let base = branch_opt.as_deref().unwrap_or(&config.branch_base);
-        let diff = run_git(project_dir, &["diff", "--name-only", &format!("{base}...HEAD")])?;
+        let diff = run_git(project_dir, &[
+            "diff",
+            "--name-only",
+            &format!("{base}...HEAD"),
+        ])?;
         for line in diff.lines() {
             files.insert(line.trim().to_string());
         }
@@ -175,48 +191,9 @@ fn query_git_files(
         && args.last.is_none()
         && config.auto_branch_off_main
     {
-        if let Ok(branch_output) = run_git(project_dir, &["rev-parse", "--abbrev-ref", "HEAD"]) {
-            let current_branch = branch_output.trim();
-            if !current_branch.is_empty() && current_branch != config.main_branch {
-                let origin_main = format!("origin/{}", config.main_branch);
-                let merge_base = run_git(project_dir, &["merge-base", "HEAD", &origin_main])
-                    .or_else(|_| run_git(project_dir, &["merge-base", "HEAD", &config.main_branch]));
-
-                if let Ok(mb_out) = merge_base {
-                    let sha = mb_out.trim();
-                    if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
-                        if let Ok(diff) = run_git(
-                            project_dir,
-                            &["diff", "--name-only", &format!("{sha}...HEAD")],
-                        ) {
-                            for line in diff.lines() {
-                                let trimmed = line.trim();
-                                if !trimmed.is_empty() {
-                                    files.insert(trimmed.to_string());
-                                }
-                            }
-                        }
-
-                        if let Ok(status) = run_git(project_dir, &["status", "--porcelain"]) {
-                            for line in status.lines() {
-                                if line.len() > 3 {
-                                    let path_part = line[3..].trim();
-                                    let target = if let Some((_old, new)) = path_part.split_once(" -> ") {
-                                        new.trim()
-                                    } else {
-                                        path_part
-                                    };
-                                    if !target.is_empty() {
-                                        files.insert(target.to_string());
-                                    }
-                                }
-                            }
-                        }
-
-                        return Ok(files.into_iter().collect());
-                    }
-                }
-            }
+        if let Some(branch_files) = query_auto_branch_files(project_dir, config)
+        {
+            return Ok(branch_files);
         }
     }
 
@@ -226,7 +203,8 @@ fn query_git_files(
         if line.len() > 3 {
             let path_part = &line[3..].trim();
             // Handle rename e.g. "R  old -> new"
-            let target = if let Some((_old, new)) = path_part.split_once(" -> ") {
+            let target = if let Some((_old, new)) = path_part.split_once(" -> ")
+            {
                 new.trim()
             } else {
                 path_part
@@ -236,6 +214,60 @@ fn query_git_files(
     }
 
     Ok(files.into_iter().collect())
+}
+
+fn query_auto_branch_files(
+    project_dir: &Path,
+    config: &ScopeConfig,
+) -> Option<Vec<String>> {
+    let branch_output =
+        run_git(project_dir, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    let current_branch = branch_output.trim();
+    if current_branch.is_empty() || current_branch == config.main_branch {
+        return None;
+    }
+
+    let origin_main = format!("origin/{}", config.main_branch);
+    let mb_out = run_git(project_dir, &["merge-base", "HEAD", &origin_main])
+        .or_else(|_| {
+            run_git(project_dir, &["merge-base", "HEAD", &config.main_branch])
+        })
+        .ok()?;
+    let sha = mb_out.trim();
+    if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let mut files = BTreeSet::new();
+    if let Ok(diff) =
+        run_git(project_dir, &["diff", "--name-only", &format!("{sha}...HEAD")])
+    {
+        for line in diff.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                files.insert(trimmed.to_string());
+            }
+        }
+    }
+
+    if let Ok(status) = run_git(project_dir, &["status", "--porcelain"]) {
+        for line in status.lines() {
+            if line.len() > 3 {
+                let path_part = line[3..].trim();
+                let target =
+                    if let Some((_old, new)) = path_part.split_once(" -> ") {
+                        new.trim()
+                    } else {
+                        path_part
+                    };
+                if !target.is_empty() {
+                    files.insert(target.to_string());
+                }
+            }
+        }
+    }
+
+    Some(files.into_iter().collect())
 }
 
 fn run_git(project_dir: &Path, args: &[&str]) -> Result<String, ScopeError> {
@@ -262,8 +294,9 @@ mod tests {
     use super::*;
 
     mod glob_matching {
-        use super::*;
         use pretty_assertions::assert_eq;
+
+        use super::*;
 
         #[test]
         fn matches_positive_and_respects_negative_globs() {
@@ -291,19 +324,20 @@ mod tests {
             let globs = vec!["**/*.rs".to_string(), "!target/**".to_string()];
 
             let filtered = filter_files_by_globs(&files, &globs);
-            assert_eq!(
-                filtered,
-                vec!["src/main.rs".to_string(), "src/lib.rs".to_string()]
-            );
+            assert_eq!(filtered, vec![
+                "src/main.rs".to_string(),
+                "src/lib.rs".to_string()
+            ]);
         }
     }
 
     mod auto_branch_scoping {
-        use super::*;
+        use std::{fs, process::Command};
+
         use pretty_assertions::assert_eq;
-        use std::fs;
-        use std::process::Command;
         use tempfile::tempdir;
+
+        use super::*;
 
         fn run_cmd(dir: &Path, program: &str, args: &[&str]) {
             let output = Command::new(program)
@@ -328,7 +362,11 @@ mod tests {
             // Initialize git repo
             run_cmd(path, "git", &["init"]);
             run_cmd(path, "git", &["config", "user.name", "Test Runner"]);
-            run_cmd(path, "git", &["config", "user.email", "test@runner.local"]);
+            run_cmd(path, "git", &[
+                "config",
+                "user.email",
+                "test@runner.local",
+            ]);
             run_cmd(path, "git", &["checkout", "-b", "main"]);
 
             // Create baseline file on main
@@ -355,10 +393,10 @@ mod tests {
             let args = ScopeArgs::default();
 
             let files = discover_files(path, &args, &config, &[]).unwrap();
-            assert_eq!(
-                files,
-                vec!["feature.rs".to_string(), "working.rs".to_string()]
-            );
+            assert_eq!(files, vec![
+                "feature.rs".to_string(),
+                "working.rs".to_string()
+            ]);
             assert!(!files.contains(&"baseline.rs".to_string()));
         }
     }

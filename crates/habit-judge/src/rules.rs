@@ -1,11 +1,18 @@
-use crate::model::TriageResult;
+use std::{
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
+
 use habit_core::{Finding, Severity};
 use regex::Regex;
-use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+
+use crate::model::TriageResult;
 
 static UNWRAP_GUARD_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(!\s*[\w\.\(\)\->]+\s*\.is_empty\(\)|\.is_some\(\)|matches!\s*\()").unwrap()
+    Regex::new(
+        r"(!\s*[\w\.\(\)\->]+\s*\.is_empty\(\)|\.is_some\(\)|matches!\s*\()",
+    )
+    .unwrap()
 });
 
 fn get_file_content(file: &str, project_dir: Option<&Path>) -> Option<String> {
@@ -33,7 +40,10 @@ fn get_surrounding_context(
     Some(lines[start_idx..end_idx].join("\n"))
 }
 
-pub fn triage_finding(finding: &Finding, project_dir: Option<&Path>) -> TriageResult {
+pub fn triage_finding(
+    finding: &Finding,
+    project_dir: Option<&Path>,
+) -> TriageResult {
     let mut result = TriageResult::default();
 
     // Rule 1: Proven Invariant Unwrap
@@ -55,19 +65,21 @@ pub fn triage_finding(finding: &Finding, project_dir: Option<&Path>) -> TriageRe
 
             // Check surrounding lines from file
             if !issue_guarded {
-                if let Some(line) = issue.details.line {
-                    if let Some(context) =
-                        get_surrounding_context(&issue.details.file, line, project_dir)
-                    {
-                        if UNWRAP_GUARD_REGEX.is_match(&context)
-                            || context.contains("!is_empty")
-                            || context.contains("is_some")
-                            || context.contains("matches!")
-                        {
-                            issue_guarded = true;
-                        }
-                    }
-                }
+                let context = issue
+                    .details
+                    .line
+                    .and_then(|line| {
+                        get_surrounding_context(
+                            &issue.details.file,
+                            line,
+                            project_dir,
+                        )
+                    })
+                    .unwrap_or_default();
+                issue_guarded = UNWRAP_GUARD_REGEX.is_match(&context)
+                    || context.contains("!is_empty")
+                    || context.contains("is_some")
+                    || context.contains("matches!");
             }
 
             if !issue_guarded {
@@ -78,17 +90,18 @@ pub fn triage_finding(finding: &Finding, project_dir: Option<&Path>) -> TriageRe
 
         if all_issues_guarded {
             result.is_benign = true;
-            result.rationale = Some("Guarded by preceding non-empty condition".to_string());
+            result.rationale =
+                Some("Guarded by preceding non-empty condition".to_string());
             return result;
         }
     }
 
     // Rule 2: Contextual Severity Adjustment
-    if finding.smell == "too-many-parameters" || finding.smell == "high-complexity" {
-        let is_test_file = finding
-            .issues
-            .iter()
-            .any(|i| i.details.file.contains("test"));
+    if finding.smell == "too-many-parameters"
+        || finding.smell == "high-complexity"
+    {
+        let is_test_file =
+            finding.issues.iter().any(|i| i.details.file.contains("test"));
 
         let primary_content = finding
             .issues
@@ -97,18 +110,21 @@ pub fn triage_finding(finding: &Finding, project_dir: Option<&Path>) -> TriageRe
             .or_else(|| {
                 let first_issue = finding.issues.first()?;
                 let line = first_issue.details.line?;
-                let content = get_file_content(&first_issue.details.file, project_dir)?;
-                content.lines().nth(line.saturating_sub(1)).map(|s| s.to_string())
+                let content =
+                    get_file_content(&first_issue.details.file, project_dir)?;
+                content
+                    .lines()
+                    .nth(line.saturating_sub(1))
+                    .map(|s| s.to_string())
             });
 
-        let trimmed_content = primary_content
-            .as_deref()
-            .unwrap_or("")
-            .trim_start();
+        let trimmed_content =
+            primary_content.as_deref().unwrap_or("").trim_start();
 
-        if is_test_file {
-            result.adjusted_severity = Some(Severity::Suggested);
-        } else if trimmed_content.starts_with("fn ") || trimmed_content.starts_with("async fn ") {
+        if is_test_file
+            || trimmed_content.starts_with("fn ")
+            || trimmed_content.starts_with("async fn ")
+        {
             result.adjusted_severity = Some(Severity::Suggested);
         } else if trimmed_content.starts_with("pub ") {
             result.adjusted_severity = Some(Severity::Enforced);
@@ -127,14 +143,17 @@ pub fn triage_finding(finding: &Finding, project_dir: Option<&Path>) -> TriageRe
         let content_to_check = if !combined_content.is_empty() {
             combined_content
         } else if let Some(first_issue) = finding.issues.first() {
-            get_file_content(&first_issue.details.file, project_dir).unwrap_or_default()
+            get_file_content(&first_issue.details.file, project_dir)
+                .unwrap_or_default()
         } else {
             String::new()
         };
 
         let archetype = if content_to_check.contains("match ") {
             "flatten_match"
-        } else if content_to_check.contains("for ") && content_to_check.contains("if ") {
+        } else if content_to_check.contains("for ")
+            && content_to_check.contains("if ")
+        {
             "monadic_combinator"
         } else {
             "extract_helper"
@@ -160,8 +179,10 @@ pub fn validate_snooze_reason(reason: &str) -> Result<(), &'static str> {
         }
     }
 
-    let technical_contexts = ["ffi", "lifetime", "legacy", "hardware", "external", "upstream"];
-    let has_technical_context = technical_contexts.iter().any(|kw| lower.contains(kw));
+    let technical_contexts =
+        ["ffi", "lifetime", "legacy", "hardware", "external", "upstream"];
+    let has_technical_context =
+        technical_contexts.iter().any(|kw| lower.contains(kw));
     if !has_technical_context {
         return Err("snooze reason must include technical context (e.g. ffi, lifetime, legacy, hardware, external, upstream)");
     }
@@ -187,10 +208,16 @@ pub fn triage_findings(
 
         if let Some(map) = finding.details.as_object_mut() {
             if let Some(severity) = triage.adjusted_severity {
-                map.insert("severity".to_string(), serde_json::to_value(severity).unwrap());
+                map.insert(
+                    "severity".to_string(),
+                    serde_json::to_value(severity).unwrap(),
+                );
             }
             if let Some(archetype) = triage.coaching_archetype {
-                map.insert("archetype".to_string(), serde_json::Value::String(archetype));
+                map.insert(
+                    "archetype".to_string(),
+                    serde_json::Value::String(archetype),
+                );
             }
         }
 
@@ -202,9 +229,10 @@ pub fn triage_findings(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use habit_core::{Finding, Issue, IssueDetails};
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn test_unwrap_guarded_by_is_empty_is_benign() {
@@ -249,7 +277,9 @@ mod tests {
                     file: "src/lib.rs".to_string(),
                     line: Some(10),
                     column: Some(5),
-                    content: Some("let val = vec.first().unwrap();".to_string()),
+                    content: Some(
+                        "let val = vec.first().unwrap();".to_string(),
+                    ),
                     message: Some("unhandled unwrap".to_string()),
                     source: None,
                     extra: Default::default(),
@@ -326,7 +356,10 @@ mod tests {
             }],
         };
         let res_match = triage_finding(&match_finding, None);
-        assert_eq!(res_match.coaching_archetype, Some("flatten_match".to_string()));
+        assert_eq!(
+            res_match.coaching_archetype,
+            Some("flatten_match".to_string())
+        );
 
         let loop_finding = Finding {
             smell: "high-complexity".to_string(),
@@ -338,7 +371,10 @@ mod tests {
                     file: "src/lib.rs".to_string(),
                     line: Some(1),
                     column: None,
-                    content: Some("for item in items { if item.valid() { count += 1; } }".to_string()),
+                    content: Some(
+                        "for item in items { if item.valid() { count += 1; } }"
+                            .to_string(),
+                    ),
                     message: None,
                     source: None,
                     extra: Default::default(),
@@ -346,7 +382,10 @@ mod tests {
             }],
         };
         let res_loop = triage_finding(&loop_finding, None);
-        assert_eq!(res_loop.coaching_archetype, Some("monadic_combinator".to_string()));
+        assert_eq!(
+            res_loop.coaching_archetype,
+            Some("monadic_combinator".to_string())
+        );
     }
 
     #[test]
@@ -354,7 +393,13 @@ mod tests {
         assert!(validate_snooze_reason("fix later").is_err());
         assert!(validate_snooze_reason("todo: cleanup later").is_err());
         assert!(validate_snooze_reason("too short").is_err());
-        assert!(validate_snooze_reason("legacy C FFI boundary requires raw unwrap").is_ok());
-        assert!(validate_snooze_reason("lifetime constraint prevents safe borrowing").is_ok());
+        assert!(validate_snooze_reason(
+            "legacy C FFI boundary requires raw unwrap"
+        )
+        .is_ok());
+        assert!(validate_snooze_reason(
+            "lifetime constraint prevents safe borrowing"
+        )
+        .is_ok());
     }
 }

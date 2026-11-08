@@ -1,9 +1,12 @@
+use std::{
+    io::{self, IsTerminal, Read},
+    path::PathBuf,
+    process,
+};
+
 use clap::Parser;
 use habit_core::Finding;
 use habit_judge::{triage_findings, validate_snooze_reason};
-use std::io::{self, IsTerminal, Read};
-use std::path::PathBuf;
-use std::process;
 
 #[derive(Parser, Debug)]
 #[command(name = "habit-judge", about = "Habit Hooks System-1 Judge Engine")]

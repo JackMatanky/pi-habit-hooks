@@ -1,6 +1,9 @@
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
+
 use habit_core::{PluginConfig, ProjectConfig};
-use std::env;
-use std::path::{Path, PathBuf};
 
 pub fn find_project_dir() -> PathBuf {
     if let Ok(dir) = env::var("HABIT_HOOKS_PROJECT_DIR") {
@@ -47,7 +50,10 @@ pub fn load_project_config(project_dir: &Path) -> ProjectConfig {
     }
 }
 
-pub fn find_plugin_dir(project_dir: &Path, plugin_name: &str) -> Option<PathBuf> {
+pub fn find_plugin_dir(
+    project_dir: &Path,
+    plugin_name: &str,
+) -> Option<PathBuf> {
     // 1. Project local plugin override: .habit-hooks/<plugin>
     let local = project_dir.join(".habit-hooks").join(plugin_name);
     if local.join("config.toml").is_file() {
@@ -71,7 +77,11 @@ pub fn find_plugin_dir(project_dir: &Path, plugin_name: &str) -> Option<PathBuf>
     // 4. Relative to executable path
     if let Ok(exe_path) = env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            for ancestor in &[exe_dir, exe_dir.parent().unwrap_or(exe_dir), exe_dir.parent().and_then(|p| p.parent()).unwrap_or(exe_dir)] {
+            for ancestor in &[
+                exe_dir,
+                exe_dir.parent().unwrap_or(exe_dir),
+                exe_dir.parent().and_then(|p| p.parent()).unwrap_or(exe_dir),
+            ] {
                 let candidate = ancestor.join("plugins").join(plugin_name);
                 if candidate.join("config.toml").is_file() {
                     return Some(candidate);
@@ -83,13 +93,17 @@ pub fn find_plugin_dir(project_dir: &Path, plugin_name: &str) -> Option<PathBuf>
     None
 }
 
-pub fn load_enabled_plugins(project_dir: &Path, config: &ProjectConfig) -> Vec<PluginConfig> {
+pub fn load_enabled_plugins(
+    project_dir: &Path,
+    config: &ProjectConfig,
+) -> Vec<PluginConfig> {
     let mut plugins = Vec::new();
 
     let is_rust_project = project_dir.join("Cargo.toml").is_file();
 
     for plugin_name in &config.plugins {
-        // Auto-disable rust plugin if project is not a Rust project (no Cargo.toml)
+        // Auto-disable rust plugin if project is not a Rust project (no
+        // Cargo.toml)
         if plugin_name == "rust" && !is_rust_project {
             continue;
         }
@@ -107,32 +121,53 @@ pub fn load_enabled_plugins(project_dir: &Path, config: &ProjectConfig) -> Vec<P
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn auto_disables_rust_plugin_when_cargo_toml_is_absent() {
         let dir = tempdir().unwrap();
-        let mut config = ProjectConfig::default();
-        config.plugins = vec!["rust".to_string()];
+        let config = ProjectConfig {
+            plugins: vec!["rust".to_string()],
+            ..ProjectConfig::default()
+        };
 
         let plugins = load_enabled_plugins(dir.path(), &config);
-        assert!(plugins.is_empty(), "rust plugin should be auto-disabled when Cargo.toml is absent");
+        assert!(
+            plugins.is_empty(),
+            "rust plugin should be auto-disabled when Cargo.toml is absent"
+        );
     }
 
     #[test]
     fn keeps_rust_plugin_when_cargo_toml_is_present() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"test\"\n").unwrap();
-        // Create local .habit-hooks/rust/config.toml so find_plugin_dir succeeds in isolated tempdir
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .unwrap();
+        // Create local .habit-hooks/rust/config.toml so find_plugin_dir
+        // succeeds in isolated tempdir
         let rust_plugin_dir = dir.path().join(".habit-hooks").join("rust");
         std::fs::create_dir_all(&rust_plugin_dir).unwrap();
-        std::fs::write(rust_plugin_dir.join("config.toml"), "language = \"rust\"\nfiles = [\"**/*.rs\"]\nsensors = []\n").unwrap();
+        std::fs::write(
+            rust_plugin_dir.join("config.toml"),
+            "language = \"rust\"\nfiles = [\"**/*.rs\"]\nsensors = []\n",
+        )
+        .unwrap();
 
-        let mut config = ProjectConfig::default();
-        config.plugins = vec!["rust".to_string()];
+        let config = ProjectConfig {
+            plugins: vec!["rust".to_string()],
+            ..ProjectConfig::default()
+        };
 
         let plugins = load_enabled_plugins(dir.path(), &config);
-        assert_eq!(plugins.len(), 1, "rust plugin should be enabled when Cargo.toml is present");
+        assert_eq!(
+            plugins.len(),
+            1,
+            "rust plugin should be enabled when Cargo.toml is present"
+        );
     }
 }

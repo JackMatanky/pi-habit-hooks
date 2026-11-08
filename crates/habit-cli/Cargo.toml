@@ -1,8 +1,8 @@
 [package]
 name = "habit-cli"
 version.workspace = true
-edition.workspace = true
 authors.workspace = true
+edition.workspace = true
 license.workspace = true
 
 [[bin]]
@@ -22,15 +22,14 @@ name = "habit-snooze"
 path = "src/bin/habit_snooze.rs"
 
 [dependencies]
-habit-core = { path = "../habit-core" }
-habit-sensors = { path = "../habit-sensors" }
-habit-mapper = { path = "../habit-mapper" }
-habit-snooze = { path = "../habit-snooze" }
-habit-judge = { path = "../habit-judge" }
 clap.workspace = true
+habit-core = { path = "../habit-core" }
+habit-judge = { path = "../habit-judge" }
+habit-mapper = { path = "../habit-mapper" }
+habit-sensors = { path = "../habit-sensors" }
+habit-snooze = { path = "../habit-snooze" }
 serde.workspace = true
 serde_json.workspace = true
-anyhow.workspace = true
 thiserror.workspace = true
 walkdir.workspace = true
 

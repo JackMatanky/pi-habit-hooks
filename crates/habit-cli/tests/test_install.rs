@@ -1,5 +1,5 @@
-use std::fs;
-use std::process::Command;
+use std::{fs, process::Command};
+
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -20,7 +20,9 @@ fn test_install_pre_commit_hook() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("✅ Installed Habit Hooks pre-commit hook in .git/hooks/pre-commit"));
+    assert!(stdout.contains(
+        "✅ Installed Habit Hooks pre-commit hook in .git/hooks/pre-commit"
+    ));
 
     let hook_file = path.join(".git").join("hooks").join("pre-commit");
     assert!(hook_file.is_file());
@@ -115,7 +117,8 @@ tool = "${dir}/sensor.sh"
 args = []
 success_exit_codes = [0]
 "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let project_config_toml = path.join(".habit-hooks").join("config.toml");
     fs::write(
@@ -124,7 +127,8 @@ success_exit_codes = [0]
 [scope]
 changedOnly = true
 "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Create and stage file
     fs::create_dir_all(path.join("src")).unwrap();
@@ -137,12 +141,13 @@ changedOnly = true
 
     let commit_output = Command::new("git")
         .current_dir(path)
-        .args(&["commit", "-m", "attempt commit"])
+        .args(["commit", "-m", "attempt commit"])
         .env("PATH", new_path)
         .output()
         .expect("git commit failed to execute");
 
-    // Commit must be blocked (exit code non-zero, specifically 1 from habit-hooks)
+    // Commit must be blocked (exit code non-zero, specifically 1 from
+    // habit-hooks)
     assert!(
         !commit_output.status.success(),
         "git commit should have been blocked by pre-commit hook"
@@ -153,7 +158,8 @@ changedOnly = true
         String::from_utf8_lossy(&commit_output.stderr)
     );
     assert!(
-        combined_output.contains("lock-across-await") || commit_output.status.code() == Some(1),
+        combined_output.contains("lock-across-await")
+            || commit_output.status.code() == Some(1),
         "pre-commit hook output did not reflect enforced smell failure"
     );
 }
@@ -257,7 +263,8 @@ fn upgrades_legacy_hk_step_to_staged_command() {
 }
 
 fn git(path: &std::path::Path, args: &[&str]) {
-    let output = Command::new("git").current_dir(path).args(args).output().unwrap();
+    let output =
+        Command::new("git").current_dir(path).args(args).output().unwrap();
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
@@ -266,11 +273,9 @@ fn git(path: &std::path::Path, args: &[&str]) {
 }
 
 fn path_with_bin(bin: &std::path::Path) -> std::ffi::OsString {
-    std::env::join_paths(
-        std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        )),
-    )
+    std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
     .unwrap()
 }
 
@@ -316,7 +321,8 @@ fn skips_native_hook_when_commit_has_no_staged_rust() {
         git(path, &["init", "-b", "main"]);
         git(path, &["config", "user.name", "Test Runner"]);
         git(path, &["config", "user.email", "test@runner.local"]);
-        fs::write(path.join("Cargo.toml"), "[package]\nname = \"sample\"\n").unwrap();
+        fs::write(path.join("Cargo.toml"), "[package]\nname = \"sample\"\n")
+            .unwrap();
         if has_rust {
             fs::create_dir(path.join("src")).unwrap();
             fs::write(path.join("src/lib.rs"), "pub fn sample() {}\n").unwrap();
@@ -337,10 +343,12 @@ fn skips_native_hook_when_commit_has_no_staged_rust() {
             .unwrap();
         assert!(installed.status.success());
 
-        fs::write(path.join("Cargo.toml"), "[package]\nname = \"changed\"\n").unwrap();
+        fs::write(path.join("Cargo.toml"), "[package]\nname = \"changed\"\n")
+            .unwrap();
         fs::write(path.join("README.txt"), "plain text\n").unwrap();
         if has_rust {
-            fs::write(path.join("src/lib.rs"), "pub fn unstaged() {}\n").unwrap();
+            fs::write(path.join("src/lib.rs"), "pub fn unstaged() {}\n")
+                .unwrap();
         }
         git(path, &["add", "Cargo.toml", "README.txt"]);
         let commit = Command::new("git")
@@ -388,8 +396,15 @@ fn invokes_native_hook_once_for_staged_rust() {
         .env("PATH", path_with_bin(&bin))
         .output()
         .unwrap();
-    assert!(commit.status.success(), "{}", String::from_utf8_lossy(&commit.stderr));
-    assert_eq!(fs::read_to_string(path.join("hook-invocations")).unwrap(), "--staged\n");
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("hook-invocations")).unwrap(),
+        "--staged\n"
+    );
 }
 
 #[cfg(unix)]
@@ -413,10 +428,15 @@ fn routes_hk_commit_once_without_native_duplicate() {
         .env("PATH", path_with_bin(&bin))
         .output()
         .unwrap();
-    assert!(installed.status.success(), "{}", String::from_utf8_lossy(&installed.stderr));
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
     assert!(!path.join(".git/hooks/pre-commit").exists());
 
-    fs::write(path.join("Cargo.toml"), "[package]\nname = \"sample\"\n").unwrap();
+    fs::write(path.join("Cargo.toml"), "[package]\nname = \"sample\"\n")
+        .unwrap();
     git(path, &["add", "Cargo.toml"]);
     let commit = Command::new("git")
         .current_dir(path)
@@ -424,7 +444,11 @@ fn routes_hk_commit_once_without_native_duplicate() {
         .env("PATH", path_with_bin(&bin))
         .output()
         .unwrap();
-    assert!(commit.status.success(), "{}", String::from_utf8_lossy(&commit.stderr));
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
     assert!(!path.join("hook-invocations").exists());
 
     fs::write(path.join("root.rs"), "fn main() {}\n").unwrap();
@@ -435,8 +459,15 @@ fn routes_hk_commit_once_without_native_duplicate() {
         .env("PATH", path_with_bin(&bin))
         .output()
         .unwrap();
-    assert!(commit.status.success(), "{}", String::from_utf8_lossy(&commit.stderr));
-    assert_eq!(fs::read_to_string(path.join("hook-invocations")).unwrap(), "--staged\n");
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("hook-invocations")).unwrap(),
+        "--staged\n"
+    );
 }
 
 #[test]
@@ -464,7 +495,8 @@ fn skips_staged_run_when_mode_file_says_off() {
     let path = dir.path();
     git(path, &["init", "-b", "main"]);
 
-    // mock plugin whose sensor always reports an enforced smell, so an active run exits 1
+    // mock plugin whose sensor always reports an enforced smell, so an active
+    // run exits 1
     let plugin_dir = path.join(".habit-hooks/mock");
     fs::create_dir_all(&plugin_dir).unwrap();
     let sensor = plugin_dir.join("sensor.sh");
@@ -479,7 +511,8 @@ fn skips_staged_run_when_mode_file_says_off() {
         "files = [\"**/*.rs\"]\n[[sensors]]\nname = \"mock-sensor\"\ntool = \"${dir}/sensor.sh\"\nargs = []\nsuccess_exit_codes = [0]\n",
     )
     .unwrap();
-    fs::write(path.join(".habit-hooks/config.toml"), "plugins = [\"mock\"]\n").unwrap();
+    fs::write(path.join(".habit-hooks/config.toml"), "plugins = [\"mock\"]\n")
+        .unwrap();
     fs::write(path.join("lib.rs"), "async fn foo() {}\n").unwrap();
     git(path, &["add", "lib.rs"]);
     let mode_file = path.join("mode");

@@ -1,12 +1,15 @@
+use std::{
+    io::{self, Read},
+    process,
+};
+
 use clap::Parser;
 use habit_cli::find_project_dir;
 use habit_core::Finding;
 use habit_snooze::{
-    add_snooze_findings, compute_blob_sha, filter_snoozed_findings, load_snooze_file,
-    prune_snooze_entries, save_snooze_file,
+    add_snooze_findings, compute_blob_sha, filter_snoozed_findings,
+    load_snooze_file, prune_snooze_entries, save_snooze_file,
 };
-use std::io::{self, Read};
-use std::process;
 
 #[derive(Parser, Debug)]
 #[command(name = "habit-snooze", about = "Habit Hooks Snooze Manager")]
@@ -35,11 +38,16 @@ fn main() {
             return;
         }
 
-        println!("{:<24} {:<32} {:<12} {:<8}", "SMELL", "KEY", "DATE", "STATUS");
+        println!(
+            "{:<24} {:<32} {:<12} {:<8}",
+            "SMELL", "KEY", "DATE", "STATUS"
+        );
         println!("{}", "-".repeat(80));
 
         for entry in &snooze_file.entries {
-            let status = if let (Some(expected), Some(ref f)) = (&entry.blob_sha, &entry.file) {
+            let status = if let (Some(expected), Some(ref f)) =
+                (&entry.blob_sha, &entry.file)
+            {
                 let current = compute_blob_sha(&project_dir, f);
                 if current.as_deref() == Some(expected.as_str()) {
                     "active"
@@ -96,11 +104,13 @@ fn main() {
     }
 
     // Default filter mode: stream filtered findings to stdout
-    let filtered = filter_snoozed_findings(findings, &snooze_file, &project_dir);
-    let output_json = serde_json::to_string_pretty(&filtered).unwrap_or_else(|err| {
-        eprintln!("habit-snooze: failed to serialize findings: {err}");
-        process::exit(1);
-    });
+    let filtered =
+        filter_snoozed_findings(findings, &snooze_file, &project_dir);
+    let output_json =
+        serde_json::to_string_pretty(&filtered).unwrap_or_else(|err| {
+            eprintln!("habit-snooze: failed to serialize findings: {err}");
+            process::exit(1);
+        });
 
     println!("{output_json}");
 }

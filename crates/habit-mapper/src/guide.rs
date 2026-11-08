@@ -1,9 +1,11 @@
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
 use habit_core::Finding;
-use minijinja::value::Serde;
-use minijinja::{Environment, Value};
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use minijinja::{value::Serde, Environment, Value};
 
 const DEFAULT_LINE_LEVEL_TEMPLATE: &str = r#"{% for issue in issues %}{{ issue.details.file }}{% if issue.details.line %}:{{ issue.details.line }}{% endif %}{% if issue.details.content %}  {{ issue.details.content }}{% elif issue.details.message %}  {{ issue.details.message }}{% endif %}
 {% endfor %}"#;
@@ -70,12 +72,11 @@ impl GuideResolver {
             }
         }
 
-        // 2. Project directory overrides: .habit-hooks/<plugin>/guides/<smell>.md
+        // 2. Project directory overrides:
+        //    .habit-hooks/<plugin>/guides/<smell>.md
         for plugin_dir in &self.plugin_dirs {
-            let plugin_name = plugin_dir
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy();
+            let plugin_name =
+                plugin_dir.file_name().unwrap_or_default().to_string_lossy();
             let project_plugin_guide = self
                 .project_dir
                 .join(".habit-hooks")
@@ -92,7 +93,8 @@ impl GuideResolver {
 
         // 3. Plugin directory: guides/<smell>.md
         for plugin_dir in &self.plugin_dirs {
-            let guide_path = plugin_dir.join("guides").join(format!("{smell}.md"));
+            let guide_path =
+                plugin_dir.join("guides").join(format!("{smell}.md"));
             if guide_path.is_file() {
                 if let Ok(content) = fs::read_to_string(&guide_path) {
                     return (content, Some(guide_path));
@@ -104,7 +106,10 @@ impl GuideResolver {
         (DEFAULT_UNCOACHED_TEMPLATE.to_string(), None)
     }
 
-    pub fn render(&self, finding: &Finding) -> Result<String, minijinja::Error> {
+    pub fn render(
+        &self,
+        finding: &Finding,
+    ) -> Result<String, minijinja::Error> {
         let (content, guide_path) = self.find_guide_content(&finding.smell);
 
         let mut env = Environment::new();
@@ -113,21 +118,19 @@ impl GuideResolver {
         let mut line_template = DEFAULT_LINE_LEVEL_TEMPLATE.to_string();
         let mut file_template = DEFAULT_FILE_LEVEL_TEMPLATE.to_string();
 
-        if let Some(ref path) = guide_path {
-            if let Some(guide_dir) = path.parent() {
-                let inc_line = guide_dir.join("includes").join("line_level_issues.md");
-                let inc_file = guide_dir.join("includes").join("file_level_issues.md");
+        if let Some(guide_dir) =
+            guide_path.as_ref().and_then(|path| path.parent())
+        {
+            let inc_line =
+                guide_dir.join("includes").join("line_level_issues.md");
+            let inc_file =
+                guide_dir.join("includes").join("file_level_issues.md");
 
-                if inc_line.is_file() {
-                    if let Ok(c) = fs::read_to_string(&inc_line) {
-                        line_template = c;
-                    }
-                }
-                if inc_file.is_file() {
-                    if let Ok(c) = fs::read_to_string(&inc_file) {
-                        file_template = c;
-                    }
-                }
+            if let Ok(content) = fs::read_to_string(&inc_line) {
+                line_template = content;
+            }
+            if let Ok(content) = fs::read_to_string(&inc_file) {
+                file_template = content;
             }
         }
 
@@ -142,20 +145,18 @@ impl GuideResolver {
                 .join("includes")
                 .join("file_level_issues.md");
 
-            if inc_line.is_file() {
-                if let Ok(c) = fs::read_to_string(&inc_line) {
-                    line_template = c;
-                }
+            if let Ok(content) = fs::read_to_string(&inc_line) {
+                line_template = content;
             }
-            if inc_file.is_file() {
-                if let Ok(c) = fs::read_to_string(&inc_file) {
-                    file_template = c;
-                }
+            if let Ok(content) = fs::read_to_string(&inc_file) {
+                file_template = content;
             }
         }
 
-        let _ = env.add_template("includes/line_level_issues.md", &line_template);
-        let _ = env.add_template("includes/file_level_issues.md", &file_template);
+        let _ =
+            env.add_template("includes/line_level_issues.md", &line_template);
+        let _ =
+            env.add_template("includes/file_level_issues.md", &file_template);
 
         let tmpl = env.template_from_str(&content)?;
         let ctx = minijinja::context! {
@@ -174,9 +175,10 @@ mod tests {
     use super::*;
 
     mod rendering {
-        use super::*;
         use habit_core::{Issue, IssueDetails};
         use pretty_assertions::assert_eq;
+
+        use super::*;
 
         #[test]
         fn renders_uncoached_template_with_issues() {
@@ -198,11 +200,15 @@ mod tests {
                 }],
             };
 
-            let resolver = GuideResolver::new(Path::new("."), &[], &BTreeMap::new());
+            let resolver =
+                GuideResolver::new(Path::new("."), &[], &BTreeMap::new());
             let output = resolver.render(&finding).unwrap();
 
             assert_eq!(output.contains("### custom-smell"), true);
-            assert_eq!(output.contains("- src/main.rs:15: variable never used"), true);
+            assert_eq!(
+                output.contains("- src/main.rs:15: variable never used"),
+                true
+            );
         }
 
         #[test]
@@ -225,7 +231,8 @@ mod tests {
                 }],
             };
 
-            let resolver = GuideResolver::new(Path::new("."), &[], &BTreeMap::new());
+            let resolver =
+                GuideResolver::new(Path::new("."), &[], &BTreeMap::new());
             let output = resolver.render(&finding).unwrap();
 
             assert_eq!(output.contains("⚠️ Habit Hooks: Incomplete Run"), true);
@@ -241,11 +248,18 @@ mod tests {
                 .unwrap()
                 .to_path_buf();
             let rust_plugin_dir = workspace.join("plugins").join("rust");
-            let resolver = GuideResolver::new(&workspace, &[rust_plugin_dir], &BTreeMap::new());
+            let resolver = GuideResolver::new(
+                &workspace,
+                &[rust_plugin_dir],
+                &BTreeMap::new(),
+            );
 
             let test_smells = [
                 ("lock-across-await", "lock across an `.await`"),
-                ("undocumented-unsafe", "Unsafe code blocks without explicit safety"),
+                (
+                    "undocumented-unsafe",
+                    "Unsafe code blocks without explicit safety",
+                ),
                 ("unhandled-unwrap", "Bare `.unwrap()` or panic-inducing"),
                 ("redundant-clone", "Excessive or unnecessary `.clone()`"),
                 ("suboptimal-borrow-type", "concrete container references"),

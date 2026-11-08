@@ -1,13 +1,22 @@
-use crate::detector::{DetectorError, DetectorResolver};
-use crate::scope::{filter_files_by_globs, ScopeArgs};
-use crate::transform::evaluate_jq;
-use habit_core::{anchor_findings, Finding, Issue, IssueDetails, PluginConfig, ProjectConfig, SensorConfig};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
+
+use habit_core::{
+    anchor_findings, Finding, Issue, IssueDetails, PluginConfig, ProjectConfig,
+    SensorConfig,
+};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use tempfile::tempdir;
+
+use crate::{
+    detector::{DetectorError, DetectorResolver},
+    scope::{filter_files_by_globs, ScopeArgs},
+    transform::evaluate_jq,
+};
 
 const MAX_ARGV_CHARS: usize = 64 * 1024; // 64 KiB safe argv budget
 
@@ -36,7 +45,8 @@ struct SensorJob<'a> {
     tool_path: PathBuf,
     files: Vec<String>,
 }
-
+type ExpandedArgsResult =
+    Result<(Vec<String>, Option<tempfile::TempDir>), String>;
 
 pub struct SensorRunner<'a> {
     pub project_dir: &'a Path,
@@ -88,65 +98,76 @@ impl<'a> SensorRunner<'a> {
                 }
             };
 
-            // If no files match the plugin's file globs in the discovered scope, skip all sensors for this plugin
+            // If no files match the plugin's file globs in the discovered
+            // scope, skip all sensors for this plugin
             if plugin_files.is_empty() {
                 continue;
             }
 
             for sensor in &plugin.sensors {
                 // Check if sensor is disabled in project config
-                if let Some(sensor_override) = self.project_config.sensors.get(&sensor.name) {
-                    if sensor_override.disabled.unwrap_or(false) {
-                        continue;
-                    }
+                let sensor_override =
+                    self.project_config.sensors.get(&sensor.name);
+                if sensor_override.is_some_and(|s| s.disabled.unwrap_or(false))
+                {
+                    continue;
                 }
 
-                // Check args placeholder requirement: if args override set, sensor template must have ${args}
+                // Check args placeholder requirement: if args override set,
+                // sensor template must have ${args}
                 if let Err(err) = self
                     .project_config
                     .validate_sensor_args(&sensor.name, &sensor.args)
                 {
-                    all_findings.push(make_incomplete_run(&sensor.name, &err.to_string()));
+                    all_findings.push(make_incomplete_run(
+                        &sensor.name,
+                        &err.to_string(),
+                    ));
                     continue;
                 }
 
                 // Compute in-scope files for this sensor
-                let sensor_files = if let Some(sensor_override) =
-                    self.project_config.sensors.get(&sensor.name)
+                let sensor_files = match sensor_override
+                    .and_then(|s| s.files.as_ref())
                 {
-                    if let Some(ref globs) = sensor_override.files {
-                        filter_files_by_globs(&plugin_files, globs)
-                    } else {
-                        plugin_files.clone()
-                    }
-                } else {
-                    plugin_files.clone()
+                    Some(globs) => filter_files_by_globs(&plugin_files, globs),
+                    None => plugin_files.clone(),
                 };
 
                 // Check if sensor expects files and has none
-                let template_has_files = sensor.args.iter().any(|arg| arg.contains("${files"));
+                let template_has_files =
+                    sensor.args.iter().any(|arg| arg.contains("${files"));
                 if template_has_files && sensor_files.is_empty() {
                     // Nothing to scan for this sensor
                     continue;
                 }
 
                 // Expand ${dir} in tool name if present
-                let expanded_tool = sensor
-                    .tool
-                    .replace("${dir}", &plugin.plugin_dir.display().to_string());
+                let expanded_tool = sensor.tool.replace(
+                    "${dir}",
+                    &plugin.plugin_dir.display().to_string(),
+                );
 
                 // Resolve tool
-                let resolved_tool = match resolver.resolve_tool(&expanded_tool) {
+                let resolved_tool = match resolver.resolve_tool(&expanded_tool)
+                {
                     Ok(p) => p,
-                    Err(DetectorError::MissingTool { name, install }) => {
+                    Err(DetectorError::MissingTool {
+                        name,
+                        install,
+                    }) => {
                         let msg = format!(
                             "habit-sensors: required tool '{name}' is not installed.\nTo install it, run: {install}"
                         );
-                        all_findings.push(make_incomplete_run(&sensor.name, &msg));
+                        all_findings
+                            .push(make_incomplete_run(&sensor.name, &msg));
                         continue;
                     }
                     Err(err) => {
-                        all_findings.push(make_incomplete_run(&sensor.name, &err.to_string()));
+                        all_findings.push(make_incomplete_run(
+                            &sensor.name,
+                            &err.to_string(),
+                        ));
                         continue;
                     }
                 };
@@ -183,12 +204,18 @@ impl<'a> SensorRunner<'a> {
         }
 
         all_findings.sort_by(|a, b| {
-            let a_file = a.issues.first().map(|i| i.details.file.as_str()).unwrap_or("");
-            let b_file = b.issues.first().map(|i| i.details.file.as_str()).unwrap_or("");
-            let a_line = a.issues.first().and_then(|i| i.details.line).unwrap_or(0);
-            let b_line = b.issues.first().and_then(|i| i.details.line).unwrap_or(0);
-            let a_col = a.issues.first().and_then(|i| i.details.column).unwrap_or(0);
-            let b_col = b.issues.first().and_then(|i| i.details.column).unwrap_or(0);
+            let a_file =
+                a.issues.first().map(|i| i.details.file.as_str()).unwrap_or("");
+            let b_file =
+                b.issues.first().map(|i| i.details.file.as_str()).unwrap_or("");
+            let a_line =
+                a.issues.first().and_then(|i| i.details.line).unwrap_or(0);
+            let b_line =
+                b.issues.first().and_then(|i| i.details.line).unwrap_or(0);
+            let a_col =
+                a.issues.first().and_then(|i| i.details.column).unwrap_or(0);
+            let b_col =
+                b.issues.first().and_then(|i| i.details.column).unwrap_or(0);
             let a_key = a.issues.first().map(|i| i.key.as_str()).unwrap_or("");
             let b_key = b.issues.first().map(|i| i.key.as_str()).unwrap_or("");
             (a.smell.as_str(), a_file, a_line, a_col, a_key)
@@ -210,7 +237,8 @@ impl<'a> SensorRunner<'a> {
         tool_path: &Path,
         files: &[String],
     ) -> Vec<Finding> {
-        let template_has_files = sensor.args.iter().any(|arg| arg.contains("${files"));
+        let template_has_files =
+            sensor.args.iter().any(|arg| arg.contains("${files"));
         if !template_has_files || files.is_empty() {
             return self.run_sensor_batch(plugin, sensor, tool_path, &[]);
         }
@@ -222,7 +250,9 @@ impl<'a> SensorRunner<'a> {
 
         for file in files {
             let file_len = file.len() + 1;
-            if !current_chunk.is_empty() && current_len + file_len > MAX_ARGV_CHARS {
+            if !current_chunk.is_empty()
+                && current_len + file_len > MAX_ARGV_CHARS
+            {
                 chunks.push(std::mem::take(&mut current_chunk));
                 current_len = 0;
             }
@@ -235,7 +265,8 @@ impl<'a> SensorRunner<'a> {
 
         let mut combined_findings = Vec::new();
         for chunk in &chunks {
-            let batch_findings = self.run_sensor_batch(plugin, sensor, tool_path, chunk);
+            let batch_findings =
+                self.run_sensor_batch(plugin, sensor, tool_path, chunk);
             combined_findings.extend(batch_findings);
         }
 
@@ -249,12 +280,13 @@ impl<'a> SensorRunner<'a> {
         tool_path: &Path,
         files: &[String],
     ) -> Vec<Finding> {
-        let (expanded_args, temp_dir_holder) = match self.expand_args(plugin, sensor, files) {
-            Ok(res) => res,
-            Err(err) => {
-                return vec![make_incomplete_run(&sensor.name, &err)];
-            }
-        };
+        let (expanded_args, temp_dir_holder) =
+            match self.expand_args(plugin, sensor, files) {
+                Ok(res) => res,
+                Err(err) => {
+                    return vec![make_incomplete_run(&sensor.name, &err)];
+                }
+            };
 
         let mut cmd = Command::new(tool_path);
         cmd.current_dir(self.project_dir);
@@ -267,7 +299,10 @@ impl<'a> SensorRunner<'a> {
             Err(err) => {
                 return vec![make_incomplete_run(
                     &sensor.name,
-                    &format!("failed to spawn '{}': {err}", tool_path.display()),
+                    &format!(
+                        "failed to spawn '{}': {err}",
+                        tool_path.display()
+                    ),
                 )];
             }
         };
@@ -299,7 +334,10 @@ impl<'a> SensorRunner<'a> {
                 Err(err) => {
                     return vec![make_incomplete_run(
                         &sensor.name,
-                        &format!("failed reading report file '{}': {err}", read_target.display()),
+                        &format!(
+                            "failed reading report file '{}': {err}",
+                            read_target.display()
+                        ),
                     )];
                 }
             }
@@ -354,10 +392,9 @@ impl<'a> SensorRunner<'a> {
         plugin: &PluginConfig,
         sensor: &SensorConfig,
         files: &[String],
-    ) -> Result<(Vec<String>, Option<tempfile::TempDir>), String> {
+    ) -> ExpandedArgsResult {
         let mut result_args = Vec::new();
         let mut temp_dir_holder: Option<tempfile::TempDir> = None;
-
         let sensor_override = self.project_config.sensors.get(&sensor.name);
         let override_args = sensor_override.and_then(|s| s.args.as_ref());
 
@@ -378,47 +415,65 @@ impl<'a> SensorRunner<'a> {
                 }
 
                 if expanded.contains("${dir}") {
-                    expanded = expanded.replace("${dir}", &plugin.plugin_dir.display().to_string());
+                    expanded = expanded.replace(
+                        "${dir}",
+                        &plugin.plugin_dir.display().to_string(),
+                    );
                 }
 
                 if expanded.contains("${config}") {
-                    let config_path = self.project_dir.join(".habit-hooks").join("config.toml");
-                    expanded = expanded.replace("${config}", &config_path.display().to_string());
+                    let config_path = self
+                        .project_dir
+                        .join(".habit-hooks")
+                        .join("config.toml");
+                    expanded = expanded.replace(
+                        "${config}",
+                        &config_path.display().to_string(),
+                    );
                 }
 
                 if expanded.contains("${report}") {
                     let temp_dir = tempdir().map_err(|e| e.to_string())?;
                     let path = temp_dir.path().to_path_buf();
-                    expanded = expanded.replace("${report}", &path.display().to_string());
+                    expanded = expanded
+                        .replace("${report}", &path.display().to_string());
                     temp_dir_holder = Some(temp_dir);
                 }
 
-                // Check for ${detector:<name>}
-                while let Some(start) = expanded.find("${detector:") {
-                    if let Some(end) = expanded[start..].find('}') {
-                        let detector_name = &expanded[start + 11..start + end];
-                        let resolver = DetectorResolver::new(
-                            self.project_dir,
-                            &plugin.plugin_dir,
-                            &plugin.detectors,
-                        );
-                        let resolved = resolver
-                            .resolve_tool(detector_name)
-                            .map_err(|e| e.to_string())?;
-                        expanded.replace_range(
-                            start..=start + end,
-                            &resolved.display().to_string(),
-                        );
-                    } else {
-                        break;
-                    }
-                }
+                expanded =
+                    self.expand_detector_placeholders(expanded, plugin)?;
 
                 result_args.push(expanded);
             }
         }
 
         Ok((result_args, temp_dir_holder))
+    }
+
+    fn expand_detector_placeholders(
+        &self,
+        mut text: String,
+        plugin: &PluginConfig,
+    ) -> Result<String, String> {
+        while let Some(start) = text.find("${detector:") {
+            let Some(end) = text[start..].find('}') else {
+                break;
+            };
+            let detector_name = &text[start + 11..start + end];
+            let resolver = DetectorResolver::new(
+                self.project_dir,
+                &plugin.plugin_dir,
+                &plugin.detectors,
+            );
+            let resolved = resolver
+                .resolve_tool(detector_name)
+                .map_err(|e| e.to_string())?;
+            text.replace_range(
+                start..=start + end,
+                &resolved.display().to_string(),
+            );
+        }
+        Ok(text)
     }
 }
 
@@ -427,9 +482,10 @@ mod tests {
     use super::*;
 
     mod runner_execution {
-        use super::*;
         use pretty_assertions::assert_eq;
         use tempfile::tempdir;
+
+        use super::*;
 
         #[test]
         fn creates_incomplete_run_on_sensor_failure() {
@@ -478,15 +534,12 @@ mod tests {
                 .expand_args(&plugin_cfg, &plugin_cfg.sensors[0], &files)
                 .unwrap();
 
-            assert_eq!(
-                args,
-                vec![
-                    format!("{}/run", dir.path().display()),
-                    "src/a.rs,src/b.rs".to_string(),
-                    "src/a.rs".to_string(),
-                    "src/b.rs".to_string(),
-                ]
-            );
+            assert_eq!(args, vec![
+                format!("{}/run", dir.path().display()),
+                "src/a.rs,src/b.rs".to_string(),
+                "src/a.rs".to_string(),
+                "src/b.rs".to_string(),
+            ]);
         }
 
         #[test]
@@ -503,7 +556,8 @@ mod tests {
                 detectors: vec![],
                 sensors: vec![SensorConfig {
                     name: "test-sensor".to_string(),
-                    // tool that doesn't exist; if run, it would fail with missing tool
+                    // tool that doesn't exist; if run, it would fail with
+                    // missing tool
                     tool: "nonexistent_tool_12345".to_string(),
                     args: vec!["${files}".to_string()],
                     success_exit_codes: vec![0],
@@ -524,7 +578,8 @@ mod tests {
             );
 
             let findings = runner.run_all();
-            // Because there are no .rs files, the plugin was short-circuited and nonexistent_tool wasn't even resolved
+            // Because there are no .rs files, the plugin was short-circuited
+            // and nonexistent_tool wasn't even resolved
             assert_eq!(findings, vec![]);
         }
     }

@@ -1,8 +1,9 @@
+use std::process;
+
 use clap::Parser;
 use habit_cli::{find_project_dir, load_enabled_plugins, load_project_config};
 use habit_sensors::{runner::SensorRunner, scope::ScopeArgs};
 use habit_snooze::{filter_snoozed_findings, load_snooze_file};
-use std::process;
 
 #[derive(Parser, Debug)]
 #[command(name = "habit-sensors", about = "Habit Hooks Sensor ETL Runner")]
@@ -45,22 +46,26 @@ fn main() {
         no_snooze: args.no_snooze,
     };
 
-    let runner = SensorRunner::new(&project_dir, &project_config, &plugins, &scope_args);
+    let runner =
+        SensorRunner::new(&project_dir, &project_config, &plugins, &scope_args);
     let findings = runner.run_all();
 
     let final_findings = if args.no_snooze {
         findings
     } else {
         match load_snooze_file(&project_dir) {
-            Ok(snooze) => filter_snoozed_findings(findings, &snooze, &project_dir),
+            Ok(snooze) => {
+                filter_snoozed_findings(findings, &snooze, &project_dir)
+            }
             Err(_) => findings,
         }
     };
 
-    let json = serde_json::to_string_pretty(&final_findings).unwrap_or_else(|err| {
-        eprintln!("habit-sensors: failed to serialize findings: {err}");
-        process::exit(1);
-    });
+    let json =
+        serde_json::to_string_pretty(&final_findings).unwrap_or_else(|err| {
+            eprintln!("habit-sensors: failed to serialize findings: {err}");
+            process::exit(1);
+        });
 
     println!("{json}");
 }
