@@ -1,4 +1,4 @@
-# pi-habit-hooks-rs (`pi-habit-hooks`)
+# pi-habit-hooks
 
 High-performance native Rust core runtime and Pi/OMP extension for [Habit
 Hooks](https://github.com/habit-hooks/habit-hooks) — a code-quality coaching
