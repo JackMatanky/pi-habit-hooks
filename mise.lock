@@ -233,6 +233,11 @@ checksum = "sha256:1615eed140039bd58e7089109883b1c434de5d6de8f64a993e6e8c80ca57b
 url = "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip"
 url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257323062"
 
+[[tools.tokei]]
+version = "15.0.0"
+backend = "cargo:tokei"
+specifiers = ["latest"]
+
 [[tools.tombi]]
 version = "1.9.7"
 backend = "aqua:tombi-toml/tombi"

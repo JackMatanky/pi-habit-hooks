@@ -32,6 +32,11 @@ tombi = "latest"
 gitleaks = "latest"
 "cargo:cargo-audit" = "latest"
 
+# -- Code metrics --
+# `tokei` splits each file into code, comment and blank lines, so file-length
+# checks can count source lines instead of raw lines (`tokei -f -o json`).
+tokei = "latest"
+
 [settings]
 # `lockfile` pins resolved tool versions into `mise.lock` so installs are
 # reproducible across machines and CI.
