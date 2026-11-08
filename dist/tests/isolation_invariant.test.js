@@ -1,27 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { initRepo, isolateModeFile } from "./helpers.js";
 import registerExtension from "../extensions/index.js";
 import { FirePolicy } from "../extensions/policy.js";
-// Never read the developer's real ~/.config/habit-hooks/mode.
-process.env.HABIT_HOOKS_MODE_FILE = join(mkdtempSync(join(tmpdir(), "habit-hooks-mode-")), "mode");
-delete process.env.HABIT_HOOKS_MODE;
-function git(cwd, ...args) {
-    execFileSync("git", args, { cwd, stdio: "ignore" });
-}
+isolateModeFile();
 async function withRepo(body) {
-    const dir = mkdtempSync(join(tmpdir(), "habit-hooks-iso-"));
+    const dir = initRepo("habit-hooks-iso-", {
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/.gitkeep": "",
+    });
     try {
-        git(dir, "init", "-q", "-b", "main");
-        git(dir, "config", "user.email", "t@example.com");
-        git(dir, "config", "user.name", "t");
-        writeFileSync(join(dir, "Cargo.toml"), '[package]\nname = "t"\n');
-        mkdirSync(join(dir, "src"));
-        git(dir, "add", ".");
-        git(dir, "commit", "-qm", "base");
         await body(dir);
     }
     finally {
@@ -39,7 +29,11 @@ function extension() {
     /** One edit tool call by `agent`, from tool_call through tool_result, exactly as the host fires them. */
     const edit = async (dir, agent, file, callId) => {
         const ctx = { cwd: dir, agent: { kind: "main", id: agent } };
-        const event = { toolName: "edit", toolCallId: callId, input: { path: file } };
+        const event = {
+            toolName: "edit",
+            toolCallId: callId,
+            input: { path: file },
+        };
         await handlers["tool_call"][0](event, ctx);
         writeFileSync(join(dir, file), `pub fn ${agent}() {}\n// ${callId}\n`);
         return handlers["tool_result"][0](event, ctx);
@@ -52,7 +46,12 @@ function fakeCli() {
     const run = async (options) => {
         scopes.push((options.files ?? ["<whole tree>"]).join());
         return options.files?.includes("src/a.rs")
-            ? { exitCode: 1, passed: false, output: "### too-many-parameters\n- src/a.rs:1: too many parameters\n" }
+            ? {
+                exitCode: 1,
+                passed: false,
+                output: "### too-many-parameters\n- src/a.rs:1: too many parameters\n",
+                report: { enforcedFiles: ["src/a.rs"], incompleteRun: false, smellCount: 1 },
+            }
             : { exitCode: 0, passed: true, output: "" };
     };
     return { run, scopes };
@@ -63,9 +62,16 @@ test("two agents editing one repo: each stop gate sees only its own file, and on
     const policy = new FirePolicy(cli.run);
     const stampA = await edit(dir, "agent-a", "src/a.rs", "call-a");
     const stampB = await edit(dir, "agent-b", "src/b.rs", "call-b");
-    assert.deepEqual(stampA, { details: { habitHooks: { hard: ["src/a.rs"], soft: [] } } });
-    assert.deepEqual(stampB, { details: { habitHooks: { hard: ["src/b.rs"], soft: [] } } });
-    const [b, a] = await Promise.all([policy.gate(dir, undefined, "agent-b"), policy.gate(dir, undefined, "agent-a")]);
+    assert.deepEqual(stampA, {
+        details: { habitHooks: { hard: ["src/a.rs"], soft: [] } },
+    });
+    assert.deepEqual(stampB, {
+        details: { habitHooks: { hard: ["src/b.rs"], soft: [] } },
+    });
+    const [b, a] = await Promise.all([
+        policy.gate(dir, undefined, "agent-b"),
+        policy.gate(dir, undefined, "agent-a"),
+    ]);
     assert.equal(b.block, false);
     assert.equal(b.status, "✅ clean");
     assert.equal(a.block, true);
@@ -77,7 +83,11 @@ test("overlapping tool calls make the attribution soft, so neither agent is refu
     const cli = fakeCli();
     const policy = new FirePolicy(cli.run);
     const call = (agent, callId) => ({
-        event: { toolName: "bash", toolCallId: callId, input: { command: "cargo fmt" } },
+        event: {
+            toolName: "bash",
+            toolCallId: callId,
+            input: { command: "cargo fmt" },
+        },
         ctx: { cwd: dir, agent: { kind: "main", id: agent } },
     });
     // both agents run a possibly-writing shell command at the same time

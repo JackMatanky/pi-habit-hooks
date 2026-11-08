@@ -1,12 +1,14 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 function findPackageRoot(startDir) {
     let current = startDir;
     while (current !== dirname(current)) {
-        if (existsSync(join(current, "package.json")) || existsSync(join(current, "Cargo.toml"))) {
+        if (existsSync(join(current, "package.json")) ||
+            existsSync(join(current, "Cargo.toml"))) {
             return current;
         }
         current = dirname(current);
@@ -29,7 +31,8 @@ export function resolveBinary(name) {
     // Fallback to name in PATH
     return name;
 }
-// Same values as timeout(1) / SIGINT / "command not found" so they never collide with habit-hooks' own 0/1/2.
+// Same values as timeout(1) / SIGINT / "command not found" so they never
+// collide with habit-hooks' own 0/1/2.
 export const EXIT_TIMED_OUT = 124;
 export const EXIT_ABORTED = 130;
 export const EXIT_SPAWN_FAILED = 127;
@@ -42,7 +45,8 @@ process.once("exit", () => {
     for (const kill of liveKills)
         kill();
 });
-// Children lead their own process group so one kill also reaps cargo/rustc/sensor grandchildren.
+// Children lead their own process group so one kill also reaps
+// cargo/rustc/sensor grandchildren.
 function killTree(child) {
     try {
         if (process.platform !== "win32" && child.pid)
@@ -54,7 +58,10 @@ function killTree(child) {
         // already exited
     }
 }
-/** Async replacement for spawnSync: never blocks the host event loop, always bounded by timeout/abort. */
+/**
+ * Async replacement for spawnSync: never blocks the host event loop, always
+ * bounded by timeout/abort.
+ */
 export function runProcess(command, args, opts) {
     const { promise, resolve } = Promise.withResolvers();
     const child = spawn(command, args, {
@@ -119,19 +126,35 @@ function toResult(proc, timeoutMs) {
         };
     }
     if (proc.aborted) {
-        return { exitCode: EXIT_ABORTED, passed: false, aborted: true, output: "habit-hooks was aborted.\n" };
+        return {
+            exitCode: EXIT_ABORTED,
+            passed: false,
+            aborted: true,
+            output: "habit-hooks was aborted.\n",
+        };
     }
     if (proc.error) {
-        return { exitCode: EXIT_SPAWN_FAILED, passed: false, output: `habit-hooks failed to start: ${proc.error.message}\n` };
+        return {
+            exitCode: EXIT_SPAWN_FAILED,
+            passed: false,
+            output: `habit-hooks failed to start: ${proc.error.message}\n`,
+        };
     }
     const exitCode = proc.code ?? 137;
-    return { exitCode, output: proc.stdout + proc.stderr, passed: exitCode === 0 };
+    return {
+        exitCode,
+        output: proc.stdout + proc.stderr,
+        passed: exitCode === 0,
+    };
 }
 export async function runHabitHooks(options = {}) {
     const cwd = options.cwd ?? process.cwd();
     const timeoutMs = options.timeoutMs ?? defaultTimeoutMs();
     const deadline = Date.now() + timeoutMs;
-    const env = { ...process.env, HABIT_HOOKS_PLUGINS_DIR: join(PACKAGE_ROOT, "plugins") };
+    const env = {
+        ...process.env,
+        HABIT_HOOKS_PLUGINS_DIR: join(PACKAGE_ROOT, "plugins"),
+    };
     // If auto-fix requested, run cargo clippy --fix first
     if (options.fix) {
         await runProcess("cargo", ["clippy", "--fix", "--allow-dirty", "--allow-no-vcs"], {
@@ -161,13 +184,39 @@ export async function runHabitHooks(options = {}) {
             args.push("--file", f);
         }
     }
-    const proc = await runProcess(resolveBinary("habit-hooks"), args, {
-        cwd,
-        env,
-        timeoutMs: Math.max(1, deadline - Date.now()), // 0 would mean "no timeout"
-        signal: options.signal,
-    });
-    return toResult(proc, timeoutMs);
+    // the CLI writes its machine-readable summary here; the temp dir is private to this run
+    const reportDir = mkdtempSync(join(tmpdir(), "habit-hooks-report-"));
+    const reportPath = join(reportDir, "report.json");
+    args.push("--report", reportPath);
+    try {
+        const proc = await runProcess(resolveBinary("habit-hooks"), args, {
+            cwd,
+            env,
+            timeoutMs: Math.max(1, deadline - Date.now()), // 0 would mean "no timeout"
+            signal: options.signal,
+        });
+        const result = toResult(proc, timeoutMs);
+        const report = readReport(reportPath);
+        return report ? { ...result, report } : result;
+    }
+    finally {
+        rmSync(reportDir, { recursive: true, force: true });
+    }
+}
+function readReport(path) {
+    try {
+        const raw = JSON.parse(readFileSync(path, "utf8"));
+        if (!Array.isArray(raw.enforcedFiles))
+            return undefined;
+        return {
+            enforcedFiles: raw.enforcedFiles.filter((f) => typeof f === "string"),
+            incompleteRun: raw.incompleteRun === true,
+            smellCount: typeof raw.smellCount === "number" ? raw.smellCount : 0,
+        };
+    }
+    catch {
+        return undefined; // the CLI died before writing it, or is an older build
+    }
 }
 export function runHabitSnooze(options) {
     const cwd = options.cwd ?? process.cwd();

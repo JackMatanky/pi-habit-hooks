@@ -109,12 +109,17 @@ Guard rails, all on by default:
   whole working tree and tells you to pass `scope: "all"` for the full codebase.
   Attribution is stamped into tool-result `details.habitHooks` and rebuilt from
   the session branch on resume. `/habit-hooks status` lists your files, the soft
-  ones, and the last gate decision.
-- **Broken builds are not your fault.** If the crate does not compile because of
+  ones, and the last gate decision. `/habit-hooks off|turn|edit --agent` changes
+  the mode for this agent only (in memory, not saved); `/habit-hooks default
+  possibly-writing shell call (two `git status` runs, 41 ms on a 5,000-file
+  repo) and nothing for edits that name their file.
+- **Blame comes from the CLI's report, not its text.** `habit-hooks --report
+  <path>` writes JSON (`enforcedFiles`, `incompleteRun`, `smellCount`); the gate
+  refuses only when an enforced file is one you wrote alone. A run with no report
+  (timeout, older binary) never blocks. If the crate does not compile because of
   files outside the checked scope, `clippy_sensor` reports an `incomplete-run`
-  finding instead of a false clean result. The gate shows `incomplete run (build
-  broken outside your files)` and does not block unless a smell is reported in a
-  file you wrote.
+  finding instead of a false clean result; the gate shows `incomplete run (build
+  broken outside your files)` and does not block on it.
 
 Known limits: `clippy_sensor` still analyzes the whole crate and filters
 findings to the requested files, so a first run in a project compiles clippy's

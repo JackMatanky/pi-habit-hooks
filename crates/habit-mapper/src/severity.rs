@@ -1,12 +1,41 @@
 use crate::guide::GuideResolver;
 use habit_core::{Finding, ProjectConfig, Severity, SmellCatalogue, UncoachedHandling};
-use std::collections::BTreeMap;
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+/// Machine-readable summary of a run, for callers that must not parse the rendered text.
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Report {
+    /// Files named by enforced findings, i.e. the ones that make the run fail.
+    pub enforced_files: BTreeSet<String>,
+    /// An enforced `incomplete-run`: the checks could not finish, so no file is judged either way.
+    pub incomplete_run: bool,
+    /// Findings that survived severity filtering (suggested ones included).
+    pub smell_count: usize,
+}
+
+impl Report {
+    fn record_enforced(&mut self, finding: &Finding) {
+        if finding.smell == "incomplete-run" {
+            self.incomplete_run = true;
+            return;
+        }
+        for issue in &finding.issues {
+            let file = issue.details.file.as_str();
+            if !self.enforced_files.contains(file) {
+                self.enforced_files.insert(file.to_owned());
+            }
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MapperResult {
     pub exit_code: i32,
     pub output: String,
+    pub report: Report,
 }
 
 pub fn evaluate_and_render(
@@ -22,6 +51,7 @@ pub fn evaluate_and_render(
         return MapperResult {
             exit_code: 2,
             output: "habit-mapper: nothing arrived on stdin — the sensors stage exited before it wrote any findings\n".to_string(),
+            report: Report::default(),
         };
     }
 
@@ -32,6 +62,7 @@ pub fn evaluate_and_render(
             return MapperResult {
                 exit_code: 2,
                 output: format!("habit-mapper: invalid JSON on stdin: {err}\n"),
+                report: Report::default(),
             };
         }
     };
@@ -41,6 +72,7 @@ pub fn evaluate_and_render(
         return MapperResult {
             exit_code: 0,
             output: "✅ Habit Hooks: automated checks passed.\n".to_string(),
+            report: Report::default(),
         };
     }
 
@@ -106,16 +138,22 @@ pub fn evaluate_and_render(
         return MapperResult {
             exit_code: 0,
             output: "✅ Habit Hooks: automated checks passed.\n".to_string(),
+            report: Report::default(),
         };
     }
 
     // Render guides
     let mut rendered_outputs = Vec::new();
     let mut has_enforced = false;
+    let mut report = Report {
+        smell_count: active_findings.len(),
+        ..Report::default()
+    };
 
     for (finding, severity) in &active_findings {
         if *severity == Severity::Enforced {
             has_enforced = true;
+            report.record_enforced(finding);
         }
 
         match guide_resolver.render(finding) {
@@ -136,6 +174,7 @@ pub fn evaluate_and_render(
     MapperResult {
         exit_code,
         output: full_output,
+        report,
     }
 }
 
@@ -249,6 +288,49 @@ mod tests {
             let res = evaluate_and_render(&json, Path::new("."), &[], &ProjectConfig::default());
             assert_eq!(res.exit_code, 0);
             assert_eq!(res.output.contains("unused-variable"), true);
+        }
+        fn finding(smell: &str, file: &str) -> Finding {
+            Finding {
+                smell: smell.to_string(),
+                language: None,
+                details: serde_json::json!({}),
+                issues: vec![Issue {
+                    key: file.to_string(),
+                    details: IssueDetails {
+                        file: file.to_string(),
+                        line: Some(1),
+                        column: None,
+                        content: None,
+                        message: None,
+                        source: None,
+                        extra: BTreeMap::new(),
+                    },
+                }],
+            }
+        }
+
+        #[test]
+        fn reports_only_files_of_enforced_findings() {
+            let json = serde_json::to_string(&vec![
+                finding("too-many-parameters", "src/a.rs"),
+                finding("too-many-parameters", "src/a.rs"),
+                finding("unused-variable", "src/b.rs"),
+            ])
+            .unwrap();
+
+            let res = evaluate_and_render(&json, Path::new("."), &[], &ProjectConfig::default());
+            assert_eq!(res.report.enforced_files.iter().collect::<Vec<_>>(), vec!["src/a.rs"]);
+            assert_eq!(res.report.smell_count, 3);
+            assert_eq!(res.report.incomplete_run, false);
+        }
+
+        #[test]
+        fn flags_incomplete_run_without_blaming_a_file() {
+            let json = serde_json::to_string(&vec![finding("incomplete-run", "Cargo.toml")]).unwrap();
+
+            let res = evaluate_and_render(&json, Path::new("."), &[], &ProjectConfig::default());
+            assert_eq!(res.report.incomplete_run, true);
+            assert_eq!(res.report.enforced_files.is_empty(), true);
         }
     }
 }

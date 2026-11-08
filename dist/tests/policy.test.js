@@ -1,17 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { git, initRepo } from "./helpers.js";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, } from "node:fs";
 import { tmpdir } from "node:os";
 import { setImmediate, setTimeout as sleep } from "node:timers/promises";
 import { join } from "node:path";
 import { getOwnership, getRepoRoot } from "../extensions/ownership.js";
-import { FirePolicy, getMode, modeFile, persistMode, setMode } from "../extensions/policy.js";
-import { runProcess } from "../extensions/runner.js";
+import { FirePolicy, getMode, modeFile, persistMode, setMode, } from "../extensions/policy.js";
+import { runProcess, } from "../extensions/runner.js";
 const SMELLS = "### too-many-parameters\n- src/lib.rs:1: too many parameters\n";
-function git(cwd, ...args) {
-    execFileSync("git", args, { cwd, stdio: "ignore" });
-}
 /** Records `files` as written by `agent` alone, as a tool_result for an uncontested edit would. */
 function owns(dir, file, agent = "main", soft = false) {
     const own = getOwnership(agent, getRepoRoot(dir));
@@ -19,15 +16,10 @@ function owns(dir, file, agent = "main", soft = false) {
 }
 /** A committed Cargo project whose src/lib.rs has an uncommitted edit. */
 function dirtyRustRepo() {
-    const dir = mkdtempSync(join(tmpdir(), "habit-hooks-policy-"));
-    git(dir, "init", "-q", "-b", "main");
-    git(dir, "config", "user.email", "t@example.com");
-    git(dir, "config", "user.name", "t");
-    writeFileSync(join(dir, "Cargo.toml"), '[package]\nname = "t"\n');
-    mkdirSync(join(dir, "src"));
-    writeFileSync(join(dir, "src/lib.rs"), "pub fn a() {}\n");
-    git(dir, "add", ".");
-    git(dir, "commit", "-qm", "base");
+    const dir = initRepo("habit-hooks-policy-", {
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/lib.rs": "pub fn a() {}\n",
+    });
     edit(dir, 1);
     owns(dir, "src/lib.rs");
     return dir;
@@ -38,6 +30,12 @@ function edit(dir, revision) {
 }
 function result(exitCode, output = "", extra = {}) {
     return { exitCode, output, passed: exitCode === 0, ...extra };
+}
+/** A failing run whose report names `files` as the enforced offenders. */
+function smelly(output, ...files) {
+    return result(1, output, {
+        report: { enforcedFiles: files, incompleteRun: false, smellCount: 1 },
+    });
 }
 /** Stand-in for the habit-hooks binary: records calls, takes a moment, never overlaps itself unnoticed. */
 function fakeRun(...results) {
@@ -66,7 +64,11 @@ async function withRepo(body) {
 test("concurrent stop gates share one run, and an unchanged tree is never re-checked", () => withRepo(async (dir) => {
     const fake = fakeRun(result(0));
     const policy = new FirePolicy(fake.run);
-    const outcomes = await Promise.all([policy.gate(dir), policy.gate(dir), policy.gate(dir)]);
+    const outcomes = await Promise.all([
+        policy.gate(dir),
+        policy.gate(dir),
+        policy.gate(dir),
+    ]);
     assert.ok(outcomes.every((o) => !o.block && o.status === "✅ clean"));
     await policy.gate(dir);
     assert.equal(fake.seen.length, 1);
@@ -83,7 +85,7 @@ test("the explicit tool path reuses the run the gate already paid for", () => wi
     assert.equal(fake.seen.length, 1);
 }));
 test("the gate refuses once per unchanged set of files, even across user prompts", () => withRepo(async (dir) => {
-    const fake = fakeRun(result(1, SMELLS));
+    const fake = fakeRun(smelly(SMELLS, "src/lib.rs"));
     const policy = new FirePolicy(fake.run);
     const first = await policy.gate(dir);
     assert.equal(first.block, true);
@@ -100,7 +102,7 @@ test("the gate refuses once per unchanged set of files, even across user prompts
     assert.equal((await policy.gate(dir)).block, true);
 }));
 test("the gate refuses at most twice per user prompt even as files keep changing", () => withRepo(async (dir) => {
-    const policy = new FirePolicy(fakeRun(result(1, SMELLS)).run);
+    const policy = new FirePolicy(fakeRun(smelly(SMELLS, "src/lib.rs")).run);
     assert.equal((await policy.gate(dir)).block, true);
     edit(dir, 2);
     assert.equal((await policy.gate(dir)).block, true);
@@ -174,7 +176,7 @@ test("an edit scan targets the edited file with a bounded timeout and reports sm
 }));
 const INCOMPLETE = "⚠️ Habit Hooks: Incomplete Run\n\nAutomated checks could not run to completion.\n\n- sensor:clippy: Crate compilation failed in files outside sensor scope\n";
 test("the gate checks only the files the asking agent wrote and ignores everyone else's", () => withRepo(async (dir) => {
-    const fake = fakeRun(result(1, SMELLS));
+    const fake = fakeRun(smelly(SMELLS, "src/lib.rs"));
     const policy = new FirePolicy(fake.run);
     // src/lib.rs is dirty and owned by "main"; "other" wrote nothing
     const bystander = await policy.gate(dir, undefined, "other");
@@ -193,27 +195,54 @@ test("with two agents in one repo, each gate scans only its own file and only th
     const seen = [];
     const policy = new FirePolicy(async (options) => {
         seen.push(options.files ?? []);
-        return options.files?.includes("src/a.rs") ? result(1, "### too-many-parameters\n- src/a.rs:1: bad\n") : result(0);
+        return options.files?.includes("src/a.rs")
+            ? smelly("### too-many-parameters\n- src/a.rs:1: bad\n", "src/a.rs")
+            : result(0);
     });
-    const [b, a] = await Promise.all([policy.gate(dir, undefined, "agent-b"), policy.gate(dir, undefined, "agent-a")]);
+    const [b, a] = await Promise.all([
+        policy.gate(dir, undefined, "agent-b"),
+        policy.gate(dir, undefined, "agent-a"),
+    ]);
     assert.equal(b.block, false);
     assert.equal(b.status, "✅ clean");
     assert.equal(a.block, true);
-    assert.deepEqual(seen.map((files) => files.join()).sort(), ["src/a.rs", "src/b.rs"]);
+    assert.deepEqual(seen.map((files) => files.join()).sort(), [
+        "src/a.rs",
+        "src/b.rs",
+    ]);
 }));
 test("smells in soft-owned files, and a build broken elsewhere, are reported but never block", () => withRepo(async (dir) => {
     const own = getOwnership("main", getRepoRoot(dir));
     own.soft.set("src/lib.rs", own.hard.get("src/lib.rs"));
     own.hard.clear();
-    const soft = await new FirePolicy(fakeRun(result(1, SMELLS)).run).gate(dir);
+    const soft = await new FirePolicy(fakeRun(smelly(SMELLS, "src/lib.rs")).run).gate(dir);
     assert.equal(soft.block, false);
     assert.match(soft.status ?? "", /advisory/);
     assert.match(soft.feedback ?? "", /too-many-parameters/);
     owns(dir, "src/lib.rs"); // hard-owned again, but the report only says the crate does not build
     edit(dir, 2);
-    const broken = await new FirePolicy(fakeRun(result(1, INCOMPLETE)).run).gate(dir);
+    const broken = await new FirePolicy(fakeRun(result(1, INCOMPLETE, {
+        report: { enforcedFiles: [], incompleteRun: true, smellCount: 1 },
+    })).run).gate(dir);
     assert.equal(broken.block, false);
     assert.match(broken.status ?? "", /incomplete run/);
+}));
+test("blame comes from the report's file list: a smell in someone else's file never blocks, a crate-prefixed spelling of mine does", () => withRepo(async (dir) => {
+    // the output text mentions src/lib.rs, but the structured report says the offender is elsewhere
+    const elsewhere = await new FirePolicy(fakeRun(smelly(SMELLS, "src/other.rs")).run).gate(dir);
+    assert.equal(elsewhere.block, false);
+    assert.match(elsewhere.status ?? "", /advisory/);
+    // sensors may prefix a crate directory; a whole trailing run of segments still names my file
+    const prefixed = await new FirePolicy(fakeRun(smelly("### x\n", "crates/t/src/lib.rs")).run).gate(dir);
+    assert.equal(prefixed.block, true);
+    // a longer file name that merely ends the same way is not my file
+    edit(dir, 2);
+    const lookalike = await new FirePolicy(fakeRun(smelly(SMELLS, "src/not_lib.rs")).run).gate(dir);
+    assert.equal(lookalike.block, false);
+    // a run without a report (timeout, old CLI) never blocks
+    edit(dir, 3);
+    const unreported = await new FirePolicy(fakeRun(result(1, SMELLS)).run).gate(dir);
+    assert.equal(unreported.block, false);
 }));
 test("attribution is dropped once a file is committed, and the agent's tool path covers only its own files", () => withRepo(async (dir) => {
     const fake = fakeRun(result(0, "ok"));
@@ -277,13 +306,19 @@ test("runProcess timeout kills the whole process group, not just the direct chil
 });
 test("runProcess stops when the caller aborts", async () => {
     const controller = new AbortController();
-    const pending = runProcess("sleep", ["30"], { cwd: process.cwd(), signal: controller.signal });
+    const pending = runProcess("sleep", ["30"], {
+        cwd: process.cwd(),
+        signal: controller.signal,
+    });
     controller.abort();
     assert.equal((await pending).aborted, true);
 });
 test("a persisted off survives a restart, and env or a process override still win", () => {
     const dir = mkdtempSync(join(tmpdir(), "habit-hooks-mode-"));
-    const saved = { file: process.env.HABIT_HOOKS_MODE_FILE, env: process.env.HABIT_HOOKS_MODE };
+    const saved = {
+        file: process.env.HABIT_HOOKS_MODE_FILE,
+        env: process.env.HABIT_HOOKS_MODE,
+    };
     process.env.HABIT_HOOKS_MODE_FILE = join(dir, "nested", "mode");
     delete process.env.HABIT_HOOKS_MODE;
     try {
@@ -299,7 +334,10 @@ test("a persisted off survives a restart, and env or a process override still wi
     }
     finally {
         setMode(undefined);
-        for (const [key, value] of [["HABIT_HOOKS_MODE_FILE", saved.file], ["HABIT_HOOKS_MODE", saved.env]]) {
+        for (const [key, value] of [
+            ["HABIT_HOOKS_MODE_FILE", saved.file],
+            ["HABIT_HOOKS_MODE", saved.env],
+        ]) {
             if (value === undefined)
                 delete process.env[key];
             else

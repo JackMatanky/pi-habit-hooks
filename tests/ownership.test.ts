@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { initRepo } from "./helpers.js";
 import {
     closeWindow,
     getOwnership,
@@ -16,22 +16,13 @@ import {
     unregisterAgent,
 } from "../extensions/ownership.js";
 
-function git(cwd: string, ...args: string[]): void {
-    execFileSync("git", args, { cwd, stdio: "ignore" });
-}
-
 /** A committed repo with src/a.rs, src/b.rs and src/c.rs; returns its (realpath) root. */
 async function withRepo(body: (root: string) => Promise<void>): Promise<void> {
-    const dir = mkdtempSync(join(tmpdir(), "habit-hooks-own-"));
+    const dir = initRepo(
+        "habit-hooks-own-",
+        Object.fromEntries(["a", "b", "c"].map((n) => [`src/${n}.rs`, `pub fn ${n}() {}\n`])),
+    );
     try {
-        git(dir, "init", "-q", "-b", "main");
-        git(dir, "config", "user.email", "t@example.com");
-        git(dir, "config", "user.name", "t");
-        mkdirSync(join(dir, "src"));
-        for (const name of ["a", "b", "c"])
-            writeFileSync(join(dir, `src/${name}.rs`), `pub fn ${name}() {}\n`);
-        git(dir, "add", ".");
-        git(dir, "commit", "-qm", "base");
         await body(getRepoRoot(dir));
     } finally {
         rmSync(dir, { recursive: true, force: true });

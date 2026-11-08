@@ -1,9 +1,13 @@
 import type { FireMode } from "./policy.js";
 /**
- * Who wrote which Rust file. Habit Hooks only ever checks, reports and blocks on files the calling agent wrote:
- * - hard: this agent changed the file and no other agent's tool call overlapped in time, so a smell is its own;
- * - soft: another agent's tool call overlapped, so attribution is uncertain and findings are advisory only.
- * Subagents roll up into their root agent, so the main session answers for what its subagents wrote.
+ * Who wrote which Rust file. Habit Hooks only ever checks, reports and blocks
+ * on files the calling agent wrote:
+ * - hard: this agent changed the file and no other agent's tool call overlapped
+ *         in time, so a smell is its own;
+ * - soft: another agent's tool call overlapped, so attribution is uncertain and
+ *         findings are advisory only.
+ * Subagents roll up into their root agent, so the main session answers for what
+ * its subagents wrote.
  */
 export interface FileSignature {
     mtimeMs: number;
@@ -14,7 +18,10 @@ export interface AgentOwnership {
     soft: Map<string, FileSignature>;
     /** Gate refusals issued since the last user prompt. */
     blocks: number;
-    /** Fingerprint of the owned files the gate last refused for; the same files are never refused twice. */
+    /**
+     * Fingerprint of the owned files the gate last refused for; the same files
+     * are never refused twice.
+     */
     blockedFingerprint?: string;
     /** Automatic runs are paused until then after a timeout. */
     suspendedUntil: number;
@@ -32,14 +39,23 @@ export interface ActiveWindow {
     repoRoot: string;
     start: number;
     toolCallId: string;
-    /** Read-only windows cannot have written anything, so they never make another agent's attribution soft. */
+    /**
+     * Read-only windows cannot have written anything, so they never make
+     * another agent's attribution soft.
+     */
     readOnly: boolean;
     preSnap?: Map<string, FileSignature>;
 }
 export declare function registerAgent(agentId: string, parentId?: string): void;
-/** A root agent's ownership dies with its session; a subagent's files already live under its root. */
+/**
+ * A root agent's ownership dies with its session; a subagent's files already
+ * live under its root.
+ */
 export declare function unregisterAgent(agentId: string): void;
-/** The root agent a (sub)agent answers to; unknown or absent ids are the main agent. */
+/**
+ * The root agent a (sub)agent answers to; unknown or absent ids are the main
+ * agent.
+ */
 export declare function resolveRoot(agentId?: string): string;
 export declare function getRepoRoot(cwd: string): string;
 export declare function getOwnership(agentRoot: string, repoRoot: string): AgentOwnership;

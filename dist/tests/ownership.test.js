@@ -1,25 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { initRepo } from "./helpers.js";
 import { closeWindow, getOwnership, getRepoRoot, openWindow, rebuildFromBranch, registerAgent, resolveRoot, toRepoPath, unregisterAgent, } from "../extensions/ownership.js";
-function git(cwd, ...args) {
-    execFileSync("git", args, { cwd, stdio: "ignore" });
-}
 /** A committed repo with src/a.rs, src/b.rs and src/c.rs; returns its (realpath) root. */
 async function withRepo(body) {
-    const dir = mkdtempSync(join(tmpdir(), "habit-hooks-own-"));
+    const dir = initRepo("habit-hooks-own-", Object.fromEntries(["a", "b", "c"].map((n) => [`src/${n}.rs`, `pub fn ${n}() {}\n`])));
     try {
-        git(dir, "init", "-q", "-b", "main");
-        git(dir, "config", "user.email", "t@example.com");
-        git(dir, "config", "user.name", "t");
-        mkdirSync(join(dir, "src"));
-        for (const name of ["a", "b", "c"])
-            writeFileSync(join(dir, `src/${name}.rs`), `pub fn ${name}() {}\n`);
-        git(dir, "add", ".");
-        git(dir, "commit", "-qm", "base");
         await body(getRepoRoot(dir));
     }
     finally {
@@ -42,7 +31,10 @@ test("an uncontested write is hard-owned, and files it did not touch are never c
 test("a named file needs no snapshot and is attributed to the window's agent", () => withRepo(async (root) => {
     await openWindow("A", root, "t1", false, false);
     write(root, "a");
-    assert.deepEqual(await closeWindow("A", root, "t1", "src/a.rs"), { hard: ["src/a.rs"], soft: [] });
+    assert.deepEqual(await closeWindow("A", root, "t1", "src/a.rs"), {
+        hard: ["src/a.rs"],
+        soft: [],
+    });
 }));
 test("writes during another agent's write window are soft, on both sides, until a clean rewrite", () => withRepo(async (root) => {
     await openWindow("A", root, "a1", false, false);
@@ -57,14 +49,20 @@ test("writes during another agent's write window are soft, on both sides, until 
     // later, alone: the file becomes the agent's own
     await openWindow("A", root, "a2", false, false);
     write(root, "a");
-    assert.deepEqual(await closeWindow("A", root, "a2", "src/a.rs"), { hard: ["src/a.rs"], soft: [] });
+    assert.deepEqual(await closeWindow("A", root, "a2", "src/a.rs"), {
+        hard: ["src/a.rs"],
+        soft: [],
+    });
     assert.equal(getOwnership("A", root).soft.size, 0);
 }));
 test("a read-only window of another agent never makes a write soft", () => withRepo(async (root) => {
     await openWindow("B", root, "b1", true);
     await openWindow("A", root, "a1", false, false);
     write(root, "a");
-    assert.deepEqual(await closeWindow("A", root, "a1", "src/a.rs"), { hard: ["src/a.rs"], soft: [] });
+    assert.deepEqual(await closeWindow("A", root, "a1", "src/a.rs"), {
+        hard: ["src/a.rs"],
+        soft: [],
+    });
     await closeWindow("B", root, "b1");
 }));
 test("a subagent's writes belong to its root and never overlap with it", () => withRepo(async (root) => {
@@ -88,20 +86,32 @@ test("a live process with an open write window makes overlapping writes soft; a 
     const agents = join(root, ".habit-hooks", "agents");
     mkdirSync(agents, { recursive: true });
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
-    const windowOf = (pid) => JSON.stringify({ pid, windows: [{ agentRoot: "elsewhere", start: Date.now() - 1000 }] });
+    const windowOf = (pid) => JSON.stringify({
+        pid,
+        windows: [{ agentRoot: "elsewhere", start: Date.now() - 1000 }],
+    });
     writeFileSync(join(agents, `${Number(dead.stdout)}.json`), windowOf(Number(dead.stdout)));
     await openWindow("A", root, "a1", false, false);
     write(root, "a");
-    assert.deepEqual(await closeWindow("A", root, "a1", "src/a.rs"), { hard: ["src/a.rs"], soft: [] });
+    assert.deepEqual(await closeWindow("A", root, "a1", "src/a.rs"), {
+        hard: ["src/a.rs"],
+        soft: [],
+    });
     writeFileSync(join(agents, `${process.ppid}.json`), windowOf(process.ppid));
     await openWindow("A", root, "a2", false, false);
     write(root, "b");
-    assert.deepEqual(await closeWindow("A", root, "a2", "src/b.rs"), { hard: [], soft: ["src/b.rs"] });
+    assert.deepEqual(await closeWindow("A", root, "a2", "src/b.rs"), {
+        hard: [],
+        soft: ["src/b.rs"],
+    });
 }));
 test("ownership is rebuilt from stamps on the session branch and reset on rewind", () => withRepo(async (root) => {
     const stamp = (hard, soft) => ({
         type: "message",
-        message: { role: "toolResult", details: { habitHooks: { hard, soft } } },
+        message: {
+            role: "toolResult",
+            details: { habitHooks: { hard, soft } },
+        },
     });
     const branch = [
         { type: "message", message: { role: "user" } },

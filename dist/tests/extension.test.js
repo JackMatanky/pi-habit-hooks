@@ -3,12 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveBinary, runHabitHooks, runHabitSnooze } from "../extensions/runner.js";
-import { modeFile, setMode } from "../extensions/policy.js";
-import registerExtension, { validateUnwrapWithLaya } from "../extensions/index.js";
-// Never read or write the developer's real ~/.config/habit-hooks/mode (`/habit-hooks off` persists).
-process.env.HABIT_HOOKS_MODE_FILE = join(mkdtempSync(join(tmpdir(), "habit-hooks-mode-")), "mode");
-delete process.env.HABIT_HOOKS_MODE;
+import { isolateModeFile } from "./helpers.js";
+import { resolveBinary, runHabitHooks, runHabitSnooze, } from "../extensions/runner.js";
+import { getMode, modeFile, setMode } from "../extensions/policy.js";
+import registerExtension, { validateUnwrapWithLaya, } from "../extensions/index.js";
+isolateModeFile();
 function host(extra = {}) {
     const handlers = {};
     const statuses = [];
@@ -46,6 +45,9 @@ test("runHabitHooks runs on workspace and returns clean status or coaching", asy
     assert.equal(typeof result.exitCode, "number");
     assert.equal(typeof result.passed, "boolean");
     assert.ok(result.output.length > 0);
+    // the CLI's structured twin of the rendered text, which the gate uses to decide blame
+    assert.equal(typeof result.report?.smellCount, "number");
+    assert.ok(Array.isArray(result.report?.enforcedFiles));
 });
 test("runHabitHooks stops a run that exceeds even a very small timeout", async () => {
     // a whole-repo scan cannot finish in 1ms; a floor on the timeout (regression) would let it run to completion
@@ -71,7 +73,9 @@ test("registers tools and commands with host", () => {
             if (typeof args[0] === "string") {
                 registeredCommands.push(args[0]);
             }
-            else if (args[0] && typeof args[0] === "object" && "name" in args[0]) {
+            else if (args[0] &&
+                typeof args[0] === "object" &&
+                "name" in args[0]) {
                 registeredCommands.push(String(args[0].name));
             }
         },
@@ -104,7 +108,10 @@ test("no automatic firing without Rust sources, in subagents, or when switched o
         "README.md": "no Rust sources here\n",
         "target/ignored.rs": "not project source\n",
     });
-    const rust = tempProject({ "Cargo.toml": "[package]\nname = \"t\"\n", "src/main.rs": "fn main() {}\n" });
+    const rust = tempProject({
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/main.rs": "fn main() {}\n",
+    });
     try {
         const { pi, handlers, statuses } = host({
             injectSystemPrompt: () => {
@@ -131,20 +138,28 @@ test("no automatic firing without Rust sources, in subagents, or when switched o
     }
 });
 test("tool_result attributes Rust writes to the agent and scans only in edit mode, only for Rust edits, never in subagents", async () => {
-    const rust = tempProject({ "Cargo.toml": "[package]\nname = \"t\"\n", "src/lib.rs": "pub fn a() {}\n" });
+    const rust = tempProject({
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/lib.rs": "pub fn a() {}\n",
+    });
     try {
         const { pi, handlers, statuses } = host();
         registerExtension(pi);
         const onResult = handlers["tool_result"][0];
         const rustEdit = { toolName: "edit", input: { path: "src/lib.rs" } };
-        const stamp = (hard, soft = []) => ({ details: { habitHooks: { hard, soft } } });
+        const stamp = (hard, soft = []) => ({
+            details: { habitHooks: { hard, soft } },
+        });
         // default `turn` mode: an edit is recorded on the tool result, and nothing fires
         assert.deepEqual(await onResult(rustEdit, { cwd: rust, agent: { id: "agent-x" } }), stamp(["src/lib.rs"]));
         setMode("edit");
         assert.equal(await onResult({ toolName: "edit", input: { path: "README.md" } }, { cwd: rust }), undefined);
         assert.equal(await onResult({ ...rustEdit, isError: true }, { cwd: rust }), undefined);
         // a subagent's write is attributed too (to itself here: no parent), but never scanned
-        assert.deepEqual(await onResult(rustEdit, { cwd: rust, agent: { kind: "sub", id: "agent-y" } }), stamp(["src/lib.rs"]));
+        assert.deepEqual(await onResult(rustEdit, {
+            cwd: rust,
+            agent: { kind: "sub", id: "agent-y" },
+        }), stamp(["src/lib.rs"]));
         assert.deepEqual(statuses, []);
         setMode("off");
         assert.equal(await onResult(rustEdit, { cwd: rust, agent: { id: "agent-z" } }), undefined);
@@ -155,7 +170,11 @@ test("tool_result attributes Rust writes to the agent and scans only in edit mod
     }
 });
 test("the badge counts the files this agent wrote, and /habit-hooks status lists them by ownership", async () => {
-    const rust = tempProject({ "Cargo.toml": "[package]\nname = \"t\"\n", "src/lib.rs": "pub fn a() {}\n", "src/b.rs": "pub fn b() {}\n" });
+    const rust = tempProject({
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/lib.rs": "pub fn a() {}\n",
+        "src/b.rs": "pub fn b() {}\n",
+    });
     try {
         const commands = {};
         const logs = [];
@@ -165,7 +184,10 @@ test("the badge counts the files this agent wrote, and /habit-hooks status lists
             },
         });
         registerExtension(pi);
-        const ui = { log: (m) => logs.push(m), setStatus: (_key, value) => void statuses.push(value) };
+        const ui = {
+            log: (m) => logs.push(m),
+            setStatus: (_key, value) => void statuses.push(value),
+        };
         const ctx = { cwd: rust, agent: { id: "badge-agent" }, ui };
         handlers["session_start"][0]({}, ctx);
         assert.equal(statuses.at(-1), "habit-hooks: turn");
@@ -180,6 +202,40 @@ test("the badge counts the files this agent wrote, and /habit-hooks status lists
         assert.match(logs[0], /this agent wrote \(checked and enforced\): src\/lib\.rs, src\/b\.rs/);
         assert.match(logs[0], /never enforced\): none/);
         assert.match(logs[0], /Last gate: none yet/);
+    }
+    finally {
+        setMode(undefined);
+        rmSync(rust, { recursive: true, force: true });
+    }
+});
+test("/habit-hooks <mode> --agent overrides one agent only, and `default --agent` undoes it", async () => {
+    const rust = tempProject({
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/lib.rs": "pub fn a() {}\n",
+    });
+    try {
+        const commands = {};
+        const logs = [];
+        const { pi, handlers } = host({
+            registerCommand: (cmd) => {
+                commands[cmd.name] = cmd;
+            },
+        });
+        registerExtension(pi);
+        const ui = { log: (m) => logs.push(m) };
+        const quiet = { cwd: rust, agent: { id: "quiet-agent" }, ui };
+        const other = { cwd: rust, agent: { id: "other-agent" }, ui };
+        const edit = { toolName: "write", input: { path: "src/lib.rs" } };
+        await commands["habit-hooks"].handler("off --agent", quiet);
+        assert.match(logs[0], /this agent only/);
+        // the overridden agent is not tracked; another agent still is, and the global mode is untouched
+        assert.equal(await handlers["tool_result"][0](edit, quiet), undefined);
+        assert.ok(await handlers["tool_result"][0](edit, other));
+        assert.equal(getMode(), "turn");
+        await commands["habit-hooks"].handler("status", quiet);
+        assert.match(logs.at(-1), /never automatically.*\(this agent only\)/);
+        await commands["habit-hooks"].handler("default --agent", quiet);
+        assert.ok(await handlers["tool_result"][0](edit, quiet));
     }
     finally {
         setMode(undefined);
@@ -236,7 +292,9 @@ test("compatibility: works with Pi host environment", async () => {
     assert.ok(commands["habit-hooks"]);
     assert.ok(commands["snooze"]);
     // 4. Prompt injection via before_agent_start (this repo is a Rust project)
-    const promptEvt = handlers["before_agent_start"][0]({ systemPrompt: ["Base prompt"] });
+    const promptEvt = handlers["before_agent_start"][0]({
+        systemPrompt: ["Base prompt"],
+    });
     assert.ok(Array.isArray(promptEvt.systemPrompt) &&
         promptEvt.systemPrompt.some((p) => p.includes("Habit Hooks Quality Coaching Rules")));
 });
@@ -264,8 +322,12 @@ test("compatibility: works with Oh My Pi (OMP) host environment", async () => {
     assert.ok(commands["habit-hooks"]);
     assert.ok(commands["snooze"]);
     try {
-        await commands["habit-hooks"].handler("off", { ui: { log: (m) => logs.push(m) } });
-        await commands["habit-hooks"].handler("status", { ui: { log: (m) => logs.push(m) } });
+        await commands["habit-hooks"].handler("off", {
+            ui: { log: (m) => logs.push(m) },
+        });
+        await commands["habit-hooks"].handler("status", {
+            ui: { log: (m) => logs.push(m) },
+        });
         assert.match(logs[0], /never automatically/);
         assert.match(logs[1], /never automatically/);
         assert.match(logs[1], /HABIT_HOOKS_TIMEOUT_MS/);
@@ -275,10 +337,15 @@ test("compatibility: works with Oh My Pi (OMP) host environment", async () => {
         setMode(undefined);
     }
     // 3. session_stop outside a Rust project lets the session finish
-    assert.deepEqual(await handlers["session_stop"][0]({}, { cwd: tmpdir() }), { interrupt: false });
+    assert.deepEqual(await handlers["session_stop"][0]({}, { cwd: tmpdir() }), {
+        interrupt: false,
+    });
 });
 test("status line is labelled with the mode, shown only in Rust projects, and says off when off", async () => {
-    const rust = tempProject({ "Cargo.toml": "[package]\nname = \"t\"\n", "src/main.rs": "fn main() {}\n" });
+    const rust = tempProject({
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/main.rs": "fn main() {}\n",
+    });
     const plain = tempProject({ "README.md": "no Rust\n" });
     try {
         const { pi, handlers, statuses } = host();

@@ -3,22 +3,18 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isolateModeFile } from "./helpers.js";
 import {
     resolveBinary,
     runHabitHooks,
     runHabitSnooze,
 } from "../extensions/runner.js";
-import { modeFile, setMode } from "../extensions/policy.js";
+import { getMode, modeFile, setMode } from "../extensions/policy.js";
 import registerExtension, {
     validateUnwrapWithLaya,
 } from "../extensions/index.js";
 
-// Never read or write the developer's real ~/.config/habit-hooks/mode (`/habit-hooks off` persists).
-process.env.HABIT_HOOKS_MODE_FILE = join(
-    mkdtempSync(join(tmpdir(), "habit-hooks-mode-")),
-    "mode",
-);
-delete process.env.HABIT_HOOKS_MODE;
+isolateModeFile();
 
 type Handlers = Record<string, Function[]>;
 type Status = string | { text: string } | undefined;
@@ -27,7 +23,7 @@ function host(extra: Record<string, unknown> = {}) {
     const handlers: Handlers = {};
     const statuses: Status[] = [];
     const pi = {
-        registerTool: () => {},
+        registerTool: () => { },
         ui: {
             setStatus: (_key: string, value: Status) => {
                 statuses.push(value);
@@ -63,6 +59,9 @@ test("runHabitHooks runs on workspace and returns clean status or coaching", asy
     assert.equal(typeof result.exitCode, "number");
     assert.equal(typeof result.passed, "boolean");
     assert.ok(result.output.length > 0);
+    // the CLI's structured twin of the rendered text, which the gate uses to decide blame
+    assert.equal(typeof result.report?.smellCount, "number");
+    assert.ok(Array.isArray(result.report?.enforcedFiles));
 });
 
 test("runHabitHooks stops a run that exceeds even a very small timeout", async () => {
@@ -302,11 +301,48 @@ test("the badge counts the files this agent wrote, and /habit-hooks status lists
         rmSync(rust, { recursive: true, force: true });
     }
 });
+test("/habit-hooks <mode> --agent overrides one agent only, and `default --agent` undoes it", async () => {
+    const rust = tempProject({
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/lib.rs": "pub fn a() {}\n",
+    });
+    try {
+        const commands: Record<string, { handler: Function }> = {};
+        const logs: string[] = [];
+        const { pi, handlers } = host({
+            registerCommand: (cmd: { name: string; handler: Function }) => {
+                commands[cmd.name] = cmd;
+            },
+        });
+        registerExtension(pi);
+        const ui = { log: (m: string) => logs.push(m) };
+        const quiet = { cwd: rust, agent: { id: "quiet-agent" }, ui };
+        const other = { cwd: rust, agent: { id: "other-agent" }, ui };
+        const edit = { toolName: "write", input: { path: "src/lib.rs" } };
+
+        await commands["habit-hooks"].handler("off --agent", quiet);
+        assert.match(logs[0], /this agent only/);
+
+        // the overridden agent is not tracked; another agent still is, and the global mode is untouched
+        assert.equal(await handlers["tool_result"][0](edit, quiet), undefined);
+        assert.ok(await handlers["tool_result"][0](edit, other));
+        assert.equal(getMode(), "turn");
+
+        await commands["habit-hooks"].handler("status", quiet);
+        assert.match(logs.at(-1)!, /never automatically.*\(this agent only\)/);
+
+        await commands["habit-hooks"].handler("default --agent", quiet);
+        assert.ok(await handlers["tool_result"][0](edit, quiet));
+    } finally {
+        setMode(undefined);
+        rmSync(rust, { recursive: true, force: true });
+    }
+});
 
 test("lifecycle: validateUnwrapWithLaya invokes Laya judge if available", async () => {
     let calledTool = "";
     const mockPi = {
-        registerTool: () => {},
+        registerTool: () => { },
         callTool: async (toolName: string, _args: Record<string, unknown>) => {
             calledTool = toolName;
             return {
@@ -372,9 +408,9 @@ test("compatibility: works with Pi host environment", async () => {
     });
     assert.ok(
         Array.isArray(promptEvt.systemPrompt) &&
-            promptEvt.systemPrompt.some((p: string) =>
-                p.includes("Habit Hooks Quality Coaching Rules"),
-            ),
+        promptEvt.systemPrompt.some((p: string) =>
+            p.includes("Habit Hooks Quality Coaching Rules"),
+        ),
     );
 });
 

@@ -1,6 +1,6 @@
-import { callKey, classifyCall, runWorkingFor, SYSTEM_GUIDELINES, tracking } from "./tracking.js";
+import { callKey, classifyCall, modeFor, runWorkingFor, SYSTEM_GUIDELINES, tracking, } from "./tracking.js";
 import { closeWindow, getOwnership, getRepoRoot, openWindow, rebuildFromBranch, registerAgent, resolveRoot, toRepoPath, unregisterAgent, } from "./ownership.js";
-import { getMode, isRustProject, modeFile, parseMode, persistMode, policy, statusText, classify } from "./policy.js";
+import { getMode, isRustProject, modeFile, parseMode, persistMode, policy, statusText, classify, } from "./policy.js";
 import { defaultTimeoutMs, runHabitHooks, runHabitSnooze } from "./runner.js";
 const MODE_DESCRIPTIONS = {
     off: "never automatically (the tools and /habit-hooks still work when invoked)",
@@ -8,7 +8,8 @@ const MODE_DESCRIPTIONS = {
     edit: "after every Rust edit, and once when the session tries to stop",
 };
 export async function validateUnwrapWithLaya(finding, pi) {
-    if (finding.smell !== "unhandled-unwrap" || typeof pi.callTool !== "function") {
+    if (finding.smell !== "unhandled-unwrap" ||
+        typeof pi.callTool !== "function") {
         return undefined;
     }
     const content = finding.issues?.[0]?.details?.content ?? "";
@@ -19,11 +20,15 @@ export async function validateUnwrapWithLaya(finding, pi) {
                 is_safe: {
                     type: "choice",
                     instructions: "Is this unwrap safe due to a local invariant or guard?",
-                    criteria: { safe: "The unwrap is safely guarded", unsafe: "The unwrap may panic" },
+                    criteria: {
+                        safe: "The unwrap is safely guarded",
+                        unsafe: "The unwrap may panic",
+                    },
                 },
             },
         })); // MCP result shape is not typed by the host
-        if (resp?.answers?.is_safe?.choice === "safe" && (resp.answers.is_safe.confidence ?? 0) >= 0.6) {
+        if (resp?.answers?.is_safe?.choice === "safe" &&
+            (resp.answers.is_safe.confidence ?? 0) >= 0.6) {
             return true;
         }
     }
@@ -61,18 +66,43 @@ export default function (pi) {
     // Shared by `execute` (Pi) and `handler` (OMP). Working-tree runs share one cached run per project.
     const runTool = async (params, ctx, signal = ctx?.signal) => {
         const cwd = ctx?.cwd ?? process.cwd();
-        const scope = typeof params.scope === "string" ? params.scope : "working";
+        const scope = typeof params.scope === "string"
+            ? params.scope
+            : "working";
         const sinceRef = typeof params.sinceRef === "string" ? params.sinceRef : undefined;
-        const files = Array.isArray(params.files) ? params.files : undefined;
+        const files = Array.isArray(params.files)
+            ? params.files
+            : undefined;
         const fix = typeof params.fix === "boolean" ? params.fix : false;
         setBadge(ctx, "⏳ habit-hooks…");
         const { result, advice } = scope === "working" && !files?.length && !fix
             ? await runWorkingFor(cwd, signal, ctx?.agent?.id)
-            : { result: await policy.exclusive(cwd, () => runHabitHooks({ scope, sinceRef, files, fix, cwd, signal })), advice: undefined };
+            : {
+                result: await policy.exclusive(cwd, () => runHabitHooks({
+                    scope,
+                    sinceRef,
+                    files,
+                    fix,
+                    cwd,
+                    signal,
+                })),
+                advice: undefined,
+            };
         setBadge(ctx, statusText(classify(result), result.output));
         return {
-            content: [{ type: "text", text: advice ? `${result.output}\n${advice}` : result.output }],
-            details: { exitCode: result.exitCode, passed: result.passed, timedOut: result.timedOut ?? false },
+            content: [
+                {
+                    type: "text",
+                    text: advice
+                        ? `${result.output}\n${advice}`
+                        : result.output,
+                },
+            ],
+            details: {
+                exitCode: result.exitCode,
+                passed: result.passed,
+                timedOut: result.timedOut ?? false,
+            },
             exitCode: result.exitCode,
             passed: result.passed,
             guidance: result.output,
@@ -144,9 +174,13 @@ export default function (pi) {
         },
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             const cwd = ctx?.cwd ?? process.cwd();
-            const action = typeof params.action === "string" ? params.action : "list";
+            const action = typeof params.action === "string"
+                ? params.action
+                : "list";
             const reason = typeof params.reason === "string" ? params.reason : undefined;
-            const inputJson = typeof params.inputJson === "string" ? params.inputJson : undefined;
+            const inputJson = typeof params.inputJson === "string"
+                ? params.inputJson
+                : undefined;
             const result = runHabitSnooze({
                 action,
                 reason,
@@ -162,7 +196,9 @@ export default function (pi) {
         },
         async handler(args, context) {
             const cwd = context?.cwd ?? process.cwd();
-            const action = typeof args.action === "string" ? args.action : "list";
+            const action = typeof args.action === "string"
+                ? args.action
+                : "list";
             const reason = typeof args.reason === "string" ? args.reason : undefined;
             const inputJson = typeof args.inputJson === "string" ? args.inputJson : undefined;
             const result = runHabitSnooze({
@@ -204,9 +240,25 @@ export default function (pi) {
                 }
             }
         };
-        registerCmd("habit-hooks", "Run Habit Hooks, or choose when it fires: /habit-hooks [--all | status | off | turn | edit]", async (args, context) => {
-            const word = args.trim().split(/\s+/)[0];
+        registerCmd("habit-hooks", "Run Habit Hooks, or choose when it fires: /habit-hooks [--all | status | off | turn | edit] (add --agent to change only this agent, or `default --agent` to undo)", async (args, context) => {
+            const words = args.trim().split(/\s+/);
+            const word = words[0];
             const mode = parseMode(word);
+            if (mode && words.includes("--agent")) {
+                // this agent in this repo only, in memory; the global mode and other agents are untouched
+                const cwd = context?.cwd ?? process.cwd();
+                getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd)).mode = mode;
+                renderBadge(context);
+                context?.ui?.log?.(`Habit Hooks now fires ${MODE_DESCRIPTIONS[mode]} for this agent only. Not saved; /habit-hooks default --agent restores the global mode.`);
+                return;
+            }
+            if (word === "default" && words.includes("--agent")) {
+                const cwd = context?.cwd ?? process.cwd();
+                getOwnership(resolveRoot(context?.agent?.id), getRepoRoot(cwd)).mode = undefined;
+                renderBadge(context);
+                context?.ui?.log?.(`This agent follows the global mode again (${getMode()}).`);
+                return;
+            }
             if (mode) {
                 persistMode(mode);
                 renderBadge(context);
@@ -219,7 +271,7 @@ export default function (pi) {
                 const list = (files) => [...files].join(", ") || "none";
                 const last = own.lastGateOutcome;
                 context?.ui?.log?.([
-                    `Habit Hooks fires ${MODE_DESCRIPTIONS[own.mode ?? getMode()]}. Run timeout ${Math.round(defaultTimeoutMs() / 1000)}s (HABIT_HOOKS_TIMEOUT_MS).`,
+                    `Habit Hooks fires ${MODE_DESCRIPTIONS[own.mode ?? getMode()]}${own.mode ? " (this agent only)" : ""}. Run timeout ${Math.round(defaultTimeoutMs() / 1000)}s (HABIT_HOOKS_TIMEOUT_MS).`,
                     `Rust files this agent wrote (checked and enforced): ${list(own.hard.keys())}`,
                     `Rust files shared with another agent's overlapping tool call (checked, never enforced): ${list(own.soft.keys())}`,
                     last
@@ -230,7 +282,11 @@ export default function (pi) {
             }
             const cwd = context?.cwd ?? process.cwd();
             if (args.includes("--all")) {
-                const result = await policy.exclusive(cwd, () => runHabitHooks({ scope: "all", cwd, signal: context?.signal }));
+                const result = await policy.exclusive(cwd, () => runHabitHooks({
+                    scope: "all",
+                    cwd,
+                    signal: context?.signal,
+                }));
                 context?.ui?.log?.(result.output);
                 return;
             }
@@ -266,9 +322,11 @@ export default function (pi) {
         });
         // 4. Coaching instructions: only for the main agent, only in a Rust project, never when firing is off.
         pi.on("before_agent_start", (event, ctx) => {
-            if (event?.reason === "revive" || ctx?.agent?.kind === "sub" || getMode() === "off")
-                return;
             const cwd = ctx?.cwd ?? event?.cwd ?? process.cwd();
+            if (event?.reason === "revive" ||
+                ctx?.agent?.kind === "sub" ||
+                modeFor(cwd, ctx?.agent?.id) === "off")
+                return;
             policy.resetBlocks(cwd, ctx?.agent?.id); // every user prompt gets a fresh gate budget
             if (!isRustProject(cwd))
                 return;
@@ -280,7 +338,9 @@ export default function (pi) {
             }
             else if (typeof prompt === "string") {
                 if (!prompt.includes("Habit Hooks Quality Coaching Rules")) {
-                    return { systemPrompt: `${prompt}\n\n${SYSTEM_GUIDELINES}` };
+                    return {
+                        systemPrompt: `${prompt}\n\n${SYSTEM_GUIDELINES}`,
+                    };
                 }
             }
         });
@@ -288,7 +348,7 @@ export default function (pi) {
         // Nothing is checked here: tool_call is pre-exec, so a scan would read the file before the edit lands.
         pi.on("tool_call", async (event, ctx) => {
             const cwd = ctx?.cwd ?? process.cwd();
-            if (!tracking(cwd))
+            if (!tracking(cwd, ctx?.agent?.id))
                 return;
             const toolName = event?.toolName ?? event?.tool;
             const call = classifyCall(toolName, event?.input ?? event?.params ?? event?.args);
@@ -302,12 +362,14 @@ export default function (pi) {
             const toolName = event?.toolName ?? event?.tool;
             const input = event?.input ?? event?.params ?? event?.args;
             let details;
-            if (tracking(cwd)) {
+            if (tracking(cwd, agentId)) {
                 const repoRoot = getRepoRoot(cwd);
                 const agentRoot = resolveRoot(agentId);
                 const { directPath } = classifyCall(toolName, input);
                 // a failed edit wrote nothing; a failed shell command may still have, which the snapshot diff catches
-                const direct = directPath && !event?.isError ? toRepoPath(cwd, repoRoot, directPath) : undefined;
+                const direct = directPath && !event?.isError
+                    ? toRepoPath(cwd, repoRoot, directPath)
+                    : undefined;
                 const owned = await closeWindow(agentRoot, repoRoot, callKey(event, agentRoot), direct);
                 if (owned.hard.length || owned.soft.length) {
                     // persisted on the session branch, which is how ownership survives a resume
@@ -318,7 +380,7 @@ export default function (pi) {
             }
             let additionalContext;
             const file = input?.path ?? input?.filePath ?? input?.file;
-            if (getMode() === "edit" &&
+            if (modeFor(cwd, agentId) === "edit" &&
                 ctx?.agent?.kind !== "sub" &&
                 !event?.isError &&
                 (toolName === "edit" || toolName === "write") &&
@@ -331,7 +393,10 @@ export default function (pi) {
                     additionalContext = `⚠️ Habit Hooks coaching feedback for ${file}:\n\n${scan.output}`;
             }
             if (details || additionalContext)
-                return { ...(details && { details }), ...(additionalContext && { additionalContext }) };
+                return {
+                    ...(details && { details }),
+                    ...(additionalContext && { additionalContext }),
+                };
         });
         // 7. The gate. session_stop is the main-session stop hook (awaited, never fired for subagents).
         // turn_end/agent_end are per-turn notifications whose results the hosts ignore, so nothing runs there.

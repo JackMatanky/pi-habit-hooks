@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { getOwnership, getRepoRoot, resolveRoot } from "./ownership.js";
 import { getMode, policy } from "./policy.js";
 export const SYSTEM_GUIDELINES = `
 ## Habit Hooks Quality Coaching Rules
@@ -8,8 +9,18 @@ export const SYSTEM_GUIDELINES = `
 3. If suppression is strictly necessary (e.g. FFI boundary), always use scoped '#[expect(lint, reason = "...")]' with an explicit technical justification. NEVER use '#![allow(...)]' at the crate or module level.
 4. If a smell cannot be immediately refactored, use 'habit_snooze' with an explicit reason. Note that snoozes lapse automatically whenever the affected file is modified.
 `;
-/** Tools that can write Rust files; everything else is treated as read-only and is never snapshot. */
-const WRITING_TOOLS = new Set(["edit", "write", "ast_edit", "bash", "eval", "python"]);
+/**
+ * Tools that can write Rust files; everything else is treated as read-only and
+ * is never snapshot.
+ */
+const WRITING_TOOLS = new Set([
+    "edit",
+    "write",
+    "ast_edit",
+    "bash",
+    "eval",
+    "python",
+]);
 const READ_ONLY_COMMAND = /^(?:cd\s+\S+|ls|cat|head|tail|wc|pwd|echo|which|rg|grep|stat|diff|sleep|true|git\s+(?:status|diff|log|show|branch|rev-parse|blame|ls-files)|cargo\s+(?:check|build|test|nextest|doc|metadata|tree|bench|clippy|--version))(?:\s|$)/;
 /** Conservative: unknown, redirected, in-place or `--fix` commands count as writers. */
 export function isReadOnlyCommand(command) {
@@ -20,7 +31,10 @@ export function isReadOnlyCommand(command) {
         return s === "" || READ_ONLY_COMMAND.test(s);
     });
 }
-/** What a tool call can write: nothing, one named Rust file (`directPath`), or anything (found by snapshot diff). */
+/**
+ * What a tool call can write: nothing, one named Rust file (`directPath`), or
+ * anything (found by snapshot diff).
+ */
 export function classifyCall(toolName, input) {
     if (!toolName || !WRITING_TOOLS.has(toolName))
         return { readOnly: true };
@@ -34,15 +48,30 @@ export function classifyCall(toolName, input) {
         return { readOnly: false, directPath: path };
     return { readOnly: path !== undefined && toolName !== "ast_edit" };
 }
-/** Pairs a tool_call with its tool_result; the fallback is only ambiguous for parallel calls of one tool by one agent. */
+/**
+ * Pairs a tool_call with its tool_result; the fallback is only ambiguous for
+ * parallel calls of one tool by one agent.
+ */
 export function callKey(event, agentRoot) {
-    return event?.toolCallId ?? event?.id ?? `${agentRoot}:${event?.toolName ?? event?.tool ?? ""}`;
+    return (event?.toolCallId ??
+        event?.id ??
+        `${agentRoot}:${event?.toolName ?? event?.tool ?? ""}`);
 }
-/** Ownership is only tracked, and only costs anything, in a Cargo project with firing switched on. */
-export function tracking(cwd) {
-    return getMode() !== "off" && existsSync(join(cwd, "Cargo.toml"));
+/**
+ * Ownership is only tracked, and only costs anything, in a Cargo project with
+ * firing switched on.
+ */
+export function tracking(cwd, agentId) {
+    return (modeFor(cwd, agentId) !== "off" && existsSync(join(cwd, "Cargo.toml")));
 }
-/** An agent's own files if it wrote any, else the whole working tree plus a hint how to scan everything. */
+/** The fire mode that applies to this agent: its own override, else the global one. */
+export function modeFor(cwd, agentId) {
+    return (getOwnership(resolveRoot(agentId), getRepoRoot(cwd)).mode ?? getMode());
+}
+/**
+ * An agent's own files if it wrote any, else the whole working tree plus a hint
+ * how to scan everything.
+ */
 export async function runWorkingFor(cwd, signal, agentId) {
     const owned = await policy.runOwned(cwd, signal, agentId);
     if (owned)

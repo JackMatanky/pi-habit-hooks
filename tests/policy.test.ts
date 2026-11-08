@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { git, initRepo } from "./helpers.js";
 import {
     mkdtempSync,
-    mkdirSync,
     readFileSync,
     rmSync,
     writeFileSync,
@@ -27,10 +26,6 @@ import {
 
 const SMELLS = "### too-many-parameters\n- src/lib.rs:1: too many parameters\n";
 
-function git(cwd: string, ...args: string[]): void {
-    execFileSync("git", args, { cwd, stdio: "ignore" });
-}
-
 /** Records `files` as written by `agent` alone, as a tool_result for an uncontested edit would. */
 function owns(dir: string, file: string, agent = "main", soft = false): void {
     const own = getOwnership(agent, getRepoRoot(dir));
@@ -39,15 +34,10 @@ function owns(dir: string, file: string, agent = "main", soft = false): void {
 
 /** A committed Cargo project whose src/lib.rs has an uncommitted edit. */
 function dirtyRustRepo(): string {
-    const dir = mkdtempSync(join(tmpdir(), "habit-hooks-policy-"));
-    git(dir, "init", "-q", "-b", "main");
-    git(dir, "config", "user.email", "t@example.com");
-    git(dir, "config", "user.name", "t");
-    writeFileSync(join(dir, "Cargo.toml"), '[package]\nname = "t"\n');
-    mkdirSync(join(dir, "src"));
-    writeFileSync(join(dir, "src/lib.rs"), "pub fn a() {}\n");
-    git(dir, "add", ".");
-    git(dir, "commit", "-qm", "base");
+    const dir = initRepo("habit-hooks-policy-", {
+        "Cargo.toml": '[package]\nname = "t"\n',
+        "src/lib.rs": "pub fn a() {}\n",
+    });
     edit(dir, 1);
     owns(dir, "src/lib.rs");
     return dir;
@@ -67,6 +57,12 @@ function result(
     extra: Partial<HabitHooksResult> = {},
 ): HabitHooksResult {
     return { exitCode, output, passed: exitCode === 0, ...extra };
+}
+/** A failing run whose report names `files` as the enforced offenders. */
+function smelly(output: string, ...files: string[]): HabitHooksResult {
+    return result(1, output, {
+        report: { enforcedFiles: files, incompleteRun: false, smellCount: 1 },
+    });
 }
 
 /** Stand-in for the habit-hooks binary: records calls, takes a moment, never overlaps itself unnoticed. */
@@ -126,7 +122,7 @@ test("the explicit tool path reuses the run the gate already paid for", () =>
 
 test("the gate refuses once per unchanged set of files, even across user prompts", () =>
     withRepo(async (dir) => {
-        const fake = fakeRun(result(1, SMELLS));
+        const fake = fakeRun(smelly(SMELLS, "src/lib.rs"));
         const policy = new FirePolicy(fake.run);
 
         const first = await policy.gate(dir);
@@ -148,7 +144,7 @@ test("the gate refuses once per unchanged set of files, even across user prompts
 
 test("the gate refuses at most twice per user prompt even as files keep changing", () =>
     withRepo(async (dir) => {
-        const policy = new FirePolicy(fakeRun(result(1, SMELLS)).run);
+        const policy = new FirePolicy(fakeRun(smelly(SMELLS, "src/lib.rs")).run);
 
         assert.equal((await policy.gate(dir)).block, true);
         edit(dir, 2);
@@ -244,7 +240,7 @@ const INCOMPLETE =
 
 test("the gate checks only the files the asking agent wrote and ignores everyone else's", () =>
     withRepo(async (dir) => {
-        const fake = fakeRun(result(1, SMELLS));
+        const fake = fakeRun(smelly(SMELLS, "src/lib.rs"));
         const policy = new FirePolicy(fake.run);
 
         // src/lib.rs is dirty and owned by "main"; "other" wrote nothing
@@ -269,7 +265,7 @@ test("with two agents in one repo, each gate scans only its own file and only th
         const policy = new FirePolicy(async (options) => {
             seen.push(options.files ?? []);
             return options.files?.includes("src/a.rs")
-                ? result(1, "### too-many-parameters\n- src/a.rs:1: bad\n")
+                ? smelly("### too-many-parameters\n- src/a.rs:1: bad\n", "src/a.rs")
                 : result(0);
         });
 
@@ -292,7 +288,7 @@ test("smells in soft-owned files, and a build broken elsewhere, are reported but
         own.soft.set("src/lib.rs", own.hard.get("src/lib.rs")!);
         own.hard.clear();
 
-        const soft = await new FirePolicy(fakeRun(result(1, SMELLS)).run).gate(
+        const soft = await new FirePolicy(fakeRun(smelly(SMELLS, "src/lib.rs")).run).gate(
             dir,
         );
         assert.equal(soft.block, false);
@@ -302,10 +298,41 @@ test("smells in soft-owned files, and a build broken elsewhere, are reported but
         owns(dir, "src/lib.rs"); // hard-owned again, but the report only says the crate does not build
         edit(dir, 2);
         const broken = await new FirePolicy(
-            fakeRun(result(1, INCOMPLETE)).run,
+            fakeRun(
+                result(1, INCOMPLETE, {
+                    report: { enforcedFiles: [], incompleteRun: true, smellCount: 1 },
+                }),
+            ).run,
         ).gate(dir);
         assert.equal(broken.block, false);
         assert.match(broken.status ?? "", /incomplete run/);
+    }));
+test("blame comes from the report's file list: a smell in someone else's file never blocks, a crate-prefixed spelling of mine does", () =>
+    withRepo(async (dir) => {
+        // the output text mentions src/lib.rs, but the structured report says the offender is elsewhere
+        const elsewhere = await new FirePolicy(
+            fakeRun(smelly(SMELLS, "src/other.rs")).run,
+        ).gate(dir);
+        assert.equal(elsewhere.block, false);
+        assert.match(elsewhere.status ?? "", /advisory/);
+
+        // sensors may prefix a crate directory; a whole trailing run of segments still names my file
+        const prefixed = await new FirePolicy(
+            fakeRun(smelly("### x\n", "crates/t/src/lib.rs")).run,
+        ).gate(dir);
+        assert.equal(prefixed.block, true);
+
+        // a longer file name that merely ends the same way is not my file
+        edit(dir, 2);
+        const lookalike = await new FirePolicy(
+            fakeRun(smelly(SMELLS, "src/not_lib.rs")).run,
+        ).gate(dir);
+        assert.equal(lookalike.block, false);
+
+        // a run without a report (timeout, old CLI) never blocks
+        edit(dir, 3);
+        const unreported = await new FirePolicy(fakeRun(result(1, SMELLS)).run).gate(dir);
+        assert.equal(unreported.block, false);
     }));
 
 test("attribution is dropped once a file is committed, and the agent's tool path covers only its own files", () =>

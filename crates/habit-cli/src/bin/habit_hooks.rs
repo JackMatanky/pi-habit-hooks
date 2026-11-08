@@ -37,6 +37,9 @@ struct Cli {
 
     #[arg(long = "no-judge", help = "Disable System-1 judge triage stage")]
     no_judge: bool,
+
+    #[arg(long, value_name = "PATH", help = "Also write a machine-readable JSON summary (enforced files, incomplete run) to PATH")]
+    report: Option<std::path::PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -114,6 +117,18 @@ fn main() {
         &plugin_dirs,
         &project_config,
     );
+
+    if let Some(path) = &cli.report {
+        // structured twin of the text below, so callers need not parse it; a failed write is not a failed check
+        match serde_json::to_string(&result.report) {
+            Ok(json) => {
+                if let Err(err) = fs::write(path, json) {
+                    eprintln!("habit-hooks: could not write report to {}: {err}", path.display());
+                }
+            }
+            Err(err) => eprintln!("habit-hooks: failed serializing report: {err}"),
+        }
+    }
 
     print!("{}", result.output);
     process::exit(result.exit_code);

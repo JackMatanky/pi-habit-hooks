@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, } from "node:path";
 import { runProcess } from "./runner.js";
 const GIT_TIMEOUT_MS = 10_000;
 /** Window files and closed windows older than this are ignored. */
@@ -14,19 +14,26 @@ let closedWindows = [];
 const repoRoots = new Map();
 /** Repos whose per-process window file this process wrote; removed on exit. */
 const publishedRepos = new Set();
-/** Repos where `.habit-hooks/agents` cannot be written: cross-process detection stays off, in-process still works. */
+/**
+ * Repos where `.habit-hooks/agents` cannot be written: cross-process detection
+ * stays off, in-process still works.
+ */
 const unwritableRepos = new Set();
 process.once("exit", () => {
     for (const repoRoot of publishedRepos)
         rmSync(windowFile(repoRoot), { force: true });
 });
-// ---------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Identity
+// -----------------------------------------------------------------------------
 export function registerAgent(agentId, parentId) {
     if (parentId && parentId !== agentId)
         parentMap.set(agentId, parentId);
 }
-/** A root agent's ownership dies with its session; a subagent's files already live under its root. */
+/**
+ * A root agent's ownership dies with its session; a subagent's files already
+ * live under its root.
+ */
 export function unregisterAgent(agentId) {
     if (parentMap.delete(agentId))
         return;
@@ -34,7 +41,10 @@ export function unregisterAgent(agentId) {
         if (key.startsWith(`${agentId}\0`))
             ownershipMap.delete(key);
 }
-/** The root agent a (sub)agent answers to; unknown or absent ids are the main agent. */
+/**
+ * The root agent a (sub)agent answers to; unknown or absent ids are the main
+ * agent.
+ */
 export function resolveRoot(agentId) {
     let id = agentId ?? "main";
     for (let hops = 0; hops < 32; hops++) {
@@ -49,7 +59,11 @@ export function getRepoRoot(cwd) {
     const cached = repoRoots.get(cwd);
     if (cached)
         return cached;
-    const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
+    const top = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd,
+        encoding: "utf8",
+        timeout: GIT_TIMEOUT_MS,
+    });
     if (top.status === 0 && top.stdout.trim()) {
         const root = top.stdout.trim();
         repoRoots.set(cwd, root);
@@ -67,7 +81,12 @@ export function getOwnership(agentRoot, repoRoot) {
     const key = `${agentRoot}\0${repoRoot}`;
     let own = ownershipMap.get(key);
     if (!own) {
-        own = { hard: new Map(), soft: new Map(), blocks: 0, suspendedUntil: 0 };
+        own = {
+            hard: new Map(),
+            soft: new Map(),
+            blocks: 0,
+            suspendedUntil: 0,
+        };
         ownershipMap.set(key, own);
     }
     return own;
@@ -84,7 +103,9 @@ export function toRepoPath(cwd, repoRoot, file) {
         // the directory does not exist (yet); keep the lexical path
     }
     const rel = relative(repoRoot, abs).split("\\").join("/");
-    return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? undefined : rel;
+    return rel === "" || rel.startsWith("..") || isAbsolute(rel)
+        ? undefined
+        : rel;
 }
 export function fileSignature(repoRoot, file) {
     try {
@@ -142,7 +163,11 @@ function publish(repoRoot) {
     }
     for (const c of closedWindows) {
         if (c.repoRoot === repoRoot)
-            windows.push({ agentRoot: c.agentRoot, start: c.start, end: c.end });
+            windows.push({
+                agentRoot: c.agentRoot,
+                start: c.start,
+                end: c.end,
+            });
     }
     const file = windowFile(repoRoot);
     try {
@@ -188,7 +213,8 @@ function foreignOverlap(repoRoot, start, end) {
             const record = JSON.parse(readFileSync(path, "utf8"));
             if (!alive(record.pid))
                 continue;
-            if (record.windows.some((w) => w.start <= end && (w.end === undefined || w.end > start)))
+            if (record.windows.some((w) => w.start <= end &&
+                (w.end === undefined || w.end > start)))
                 return true;
         }
         catch {
@@ -200,11 +226,17 @@ function foreignOverlap(repoRoot, start, end) {
 /** Another root agent's write window overlapped [start, end], in this process or in another one. */
 function overlapsOther(agentRoot, repoRoot, start, end) {
     for (const w of activeWindows.values()) {
-        if (w.repoRoot === repoRoot && !w.readOnly && w.agentRoot !== agentRoot && w.start <= end)
+        if (w.repoRoot === repoRoot &&
+            !w.readOnly &&
+            w.agentRoot !== agentRoot &&
+            w.start <= end)
             return true;
     }
     for (const c of closedWindows) {
-        if (c.repoRoot === repoRoot && c.agentRoot !== agentRoot && c.start <= end && c.end > start)
+        if (c.repoRoot === repoRoot &&
+            c.agentRoot !== agentRoot &&
+            c.start <= end &&
+            c.end > start)
             return true;
     }
     return foreignOverlap(repoRoot, start, end);
@@ -214,7 +246,13 @@ function overlapsOther(agentRoot, repoRoot, start, end) {
  * `snapshot` is false when the call names the one file it writes, so no snapshot is needed to find it.
  */
 export async function openWindow(agentRoot, repoRoot, toolCallId, isReadOnly, snapshot = !isReadOnly) {
-    const win = { agentRoot, repoRoot, start: Date.now(), toolCallId, readOnly: isReadOnly };
+    const win = {
+        agentRoot,
+        repoRoot,
+        start: Date.now(),
+        toolCallId,
+        readOnly: isReadOnly,
+    };
     activeWindows.set(toolCallId, win); // registered before the snapshot so a concurrent close already sees the overlap
     if (!isReadOnly)
         publish(repoRoot);
@@ -244,7 +282,9 @@ export async function closeWindow(agentRoot, repoRoot, toolCallId, directFile) {
     const start = win?.start ?? end;
     if (win && !win.readOnly) {
         closedWindows.push({ agentRoot, repoRoot, start, end });
-        closedWindows = closedWindows.filter((c) => end - c.end < WINDOW_TTL_MS).slice(-CLOSED_CAP);
+        closedWindows = closedWindows
+            .filter((c) => end - c.end < WINDOW_TTL_MS)
+            .slice(-CLOSED_CAP);
         publish(repoRoot);
     }
     const out = { hard: [], soft: [] };
@@ -273,7 +313,9 @@ function stampOf(entry) {
     const stamp = (e?.message?.details ?? e?.details)?.habitHooks;
     if (!stamp)
         return undefined;
-    const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+    const strings = (v) => Array.isArray(v)
+        ? v.filter((x) => typeof x === "string")
+        : [];
     return { hard: strings(stamp.hard), soft: strings(stamp.soft) };
 }
 /** Replays the `details.habitHooks` stamps of a session branch, so ownership survives resume and rewind. */
